@@ -1073,6 +1073,15 @@ class NetHUBUltimate(ctk.CTk):
         }
         self.config_manager.config["session_timeout"] = session_timeout
         self.config_manager.save_config()
+        
+        # Exportar datos de usuario para recomendaciones si está activado
+        if self.config_manager.config.get("export_recommendations", True):
+            success, msg = self.user_manager.export_user_recommendations(username)
+            if success:
+                print(f"[INFO] {msg}")
+            else:
+                print(f"[WARNING] No se pudo exportar datos: {msg}")
+        
         self.show_main_app()
         self.toast.show(message or f"Bienvenido {self.current_display_name}", duration=2, type="success")
     
@@ -2969,23 +2978,23 @@ class NetHUBUltimate(ctk.CTk):
 
         # ========== ACTUALIZACIONES ==========
         sec_updates = seccion(scroll, "🔄 Actualizaciones")
-
+        
         upd_status_frame = ctk.CTkFrame(sec_updates, fg_color="transparent")
         upd_status_frame.pack(fill="x", padx=15, pady=(5, 10))
-
+        
         ctk.CTkLabel(upd_status_frame, text=f"Version actual: NetHUB Ultimate {getattr(self.updater, 'CURRENT_VERSION', '2.0.0') if hasattr(self, 'updater') else '2.0.0'}",
                      font=("Arial", 11), text_color=self.colors["text_secondary"]).pack(side="left")
-
+        
         ctk.CTkButton(sec_updates, text="🔍 Verificar actualizaciones",
                       command=self.check_updates_manual,
                       fg_color=self.colors["accent"], width=220).pack(pady=6, padx=15, anchor="w")
-
+        
         upd_url_frame = ctk.CTkFrame(sec_updates, fg_color="transparent")
         upd_url_frame.pack(fill="x", padx=15, pady=(0, 10))
-
+        
         ctk.CTkLabel(upd_url_frame, text="URL de actualizacion:", font=("Arial", 9),
                      text_color=self.colors["text_secondary"]).pack(side="left")
-
+        
         upd_url_entry = ctk.CTkEntry(upd_url_frame, width=320,
                                      placeholder_text="https://raw.githubusercontent.com/.../version.json",
                                      font=("Arial", 9))
@@ -2995,13 +3004,101 @@ class NetHUBUltimate(ctk.CTk):
             upd_url_entry.insert(0, saved_url)
         else:
             upd_url_entry.insert(0, self.updater.get_update_url() if hasattr(self, "updater") else "")
-
+        
         def save_update_url():
             self.configure_update_url(upd_url_entry.get().strip())
-
+        
         ctk.CTkButton(upd_url_frame, text="Guardar", command=save_update_url,
                       fg_color=self.colors["accent"], width=70, height=24, font=("Arial", 9)).pack(side="left")
-
+        
+        # ========== RECOMENDACIONES ==========
+        sec_recomendaciones = seccion(scroll, "📊 Recomendaciones")
+        export_switch = ctk.CTkSwitch(sec_recomendaciones, text="Exportar datos para recomendaciones",
+                                      progress_color=self.colors["accent"])
+        export_switch.pack(anchor="w", padx=15, pady=12)
+        export_switch.select() if self.config_manager.config.get("export_recommendations", True) else export_switch.deselect()
+        def toggle_export_recomendaciones():
+            self.config_manager.config["export_recommendations"] = bool(export_switch.get())
+            self.config_manager.save_config()
+            self.toast.show("Configuración de exportación guardada", type="success")
+        export_switch.configure(command=toggle_export_recomendaciones)
+        
+        # ========== CONTACTO ==========
+        sec_contacto = seccion(scroll, "📞 Contacto")
+        contact_switch = ctk.CTkSwitch(sec_contacto, text="Habilitar opción de contacto",
+                                       progress_color=self.colors["accent"])
+        contact_switch.pack(anchor="w", padx=15, pady=12)
+        contact_switch.select() if self.config_manager.config.get("contact_enabled", True) else contact_switch.deselect()
+        def toggle_contacto():
+            self.config_manager.config["contact_enabled"] = bool(contact_switch.get())
+            self.config_manager.save_config()
+            self.toast.show("Configuración de contacto guardada", type="success")
+        contact_switch.configure(command=toggle_contacto)
+        
+        def crear_ticket():
+            # Función simple para crear un ticket (en un caso real, esto enviaría un email o crearía un issue)
+            import tkinter as tk
+            from tkinter import simpledialog
+            
+            # Crear una ventana simple para el ticket
+            ticket_win = ctk.CTkToplevel(self)
+            ticket_win.title("Crear Ticket de Soporte")
+            ticket_win.geometry("400x300")
+            ticket_win.grab_set()
+            
+            ctk.CTkLabel(ticket_win, text="Crear Ticket de Soporte", 
+                        font=("Arial", 16, "bold")).pack(pady=10)
+            
+            ctk.CTkLabel(ticket_win, text="Describe tu problema o sugerencia:").pack(pady=(10, 5))
+            
+            ticket_text = ctk.CTkTextbox(ticket_win, width=350, height=150)
+            ticket_text.pack(pady=10, padx=20)
+            
+            def enviar_ticket():
+                mensaje = ticket_text.get("1.0", "end-1c").strip()
+                if not mensaje:
+                    self.toast.show("Por favor, describe tu problema", type="error")
+                    return
+                
+                # En una implementación real, aquí se enviaría el ticket por email o se crearía un issue en GitHub
+                # Por ahora, solo guardamos el ticket en un archivo local
+                import json
+                import time
+                import os
+                
+                ticket_data = {
+                    "user": self.current_user,
+                    "timestamp": time.time(),
+                    "message": mensaje,
+                    "type": "soporte"
+                }
+                
+                tickets_dir = "tickets"
+                os.makedirs(tickets_dir, exist_ok=True)
+                
+                ticket_file = os.path.join(tickets_dir, f"ticket_{int(time.time())}.json")
+                try:
+                    with open(ticket_file, "w", encoding="utf-8") as f:
+                        json.dump(ticket_data, f, indent=2, ensure_ascii=False)
+                    
+                    self.toast.show("Ticket creado exitosamente", type="success")
+                    ticket_win.destroy()
+                except Exception as e:
+                    self.toast.show(f"Error al crear ticket: {str(e)}", type="error")
+            
+            btn_frame = ctk.CTkFrame(ticket_win, fg_color="transparent")
+            btn_frame.pack(pady=10)
+            
+            ctk.CTkButton(btn_frame, text="Cancelar", command=ticket_win.destroy,
+                         fg_color="transparent", hover_color=self.colors["hover"]).pack(side="left", padx=10)
+            ctk.CTkButton(btn_frame, text="Enviar Ticket", command=enviar_ticket,
+                         fg_color=self.colors["accent"], hover_color=self.colors["hover"]).pack(side="left", padx=10)
+        
+        contact_btn = ctk.CTkButton(sec_contacto, text="¡Contáctame!", command=crear_ticket,
+                                   fg_color=self.colors["accent"], hover_color=self.colors["hover"],
+                                   width=200, height=35)
+        contact_btn.pack(pady=10, padx=15, anchor="w")
+        
         # ========== INFO ==========
         sec_info = seccion(scroll, "ℹ️ Información")
         ctk.CTkLabel(sec_info,

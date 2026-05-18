@@ -147,6 +147,45 @@ class UserManager:
         self.save_users()
         return True, "Contraseña actualizada"
 
+    def export_user_recommendations(self, username, recommendations_subdir="recommendations"):
+        """Export user data to recommendations folder"""
+        if username not in self.users:
+            return False, "Usuario no encontrado"
+        
+        # Get directory of users file
+        users_dir = os.path.dirname(os.path.abspath(self.users_file))
+        if not users_dir:  # If users_file is in current directory
+            users_dir = "."
+        
+        # Create recommendations directory
+        rec_dir = os.path.join(users_dir, recommendations_subdir)
+        os.makedirs(rec_dir, exist_ok=True)
+        
+        # Prepare user data (exclude sensitive information)
+        user_data = self.users[username].copy()
+        # Remove sensitive fields
+        user_data.pop("password", None)
+        # Optionally remove other fields if needed
+        
+        # Add export timestamp
+        user_data["exported_at"] = __import__("time").time()
+        user_data["exported_iso"] = datetime.datetime.fromtimestamp(
+            user_data["exported_at"]).isoformat()
+        
+        # Create filename based on username (sanitized)
+        safe_username = "".join(c for c in username if c.isalnum() or c in "._- ").rstrip()
+        if not safe_username:
+            safe_username = "user"
+        
+        file_path = os.path.join(rec_dir, f"{safe_username}_recommendations.json")
+        
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(user_data, f, indent=2, ensure_ascii=False)
+            return True, f"Datos exportados a {file_path}"
+        except Exception as e:
+            return False, f"Error al exportar: {str(e)}"
+
 
 class ConfigManager:
     def __init__(self, config_file=None):
@@ -163,10 +202,12 @@ class ConfigManager:
                     if "appearance_mode" not in cfg: cfg["appearance_mode"] = "System"
                     if "sound_effects" not in cfg: cfg["sound_effects"] = True
                     if "dashboard_layout" not in cfg: cfg["dashboard_layout"] = None
+                    if "export_recommendations" not in cfg: cfg["export_recommendations"] = True
+                    if "contact_enabled" not in cfg: cfg["contact_enabled"] = True
                     return cfg
                 except Exception:
                     pass
-        return {"theme": "dark", "custom_colors": None, "appearance_mode": "System", "sound_effects": True, "dashboard_layout": None}
+        return {"theme": "dark", "custom_colors": None, "appearance_mode": "System", "sound_effects": True, "dashboard_layout": None, "export_recommendations": True, "contact_enabled": True}
 
     def save_config(self):
         with open(self.config_file, 'w') as f:
