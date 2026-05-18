@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# NetHUB - Datos del usuario (NO distribuir)
+users.json
+config.json
+chat_history.json
+notes/
+assets/avatars/
+
+# NetHUB - Credenciales (NUNCA commitear)
+google_oauth_client.json
+*.key
+*.pem
+
+# NetHUB - Build artifacts
+dist/
+build/
+*.spec
+*.log
+*.tmp
+
+# NetHUB - Repos preparados
+../nethub-ultimate/
+../nethub-distro/

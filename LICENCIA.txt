@@ -1,0 +1,62 @@
+LICENCIA COMERCIAL DE NETHUB ULTIMATE
+
+Copyright (c) 2026 NetHUB. Todos los derechos reservados.
+
+1. DEFINICIONES
+   "Software" se refiere a NetHUB Ultimate, incluyendo todo el código fuente,
+   binarios, documentación y materiales asociados.
+   "Licenciatario" se refiere a la persona o entidad que adquiere una licencia.
+   "Licenciante" se refiere al titular de los derechos de autor del Software.
+
+2. CONCESIÓN DE LICENCIA
+   Sujeto al pago de las tarifas correspondientes y al cumplimiento de los
+   términos de esta licencia, el Licenciante otorga al Licenciatario una licencia
+   no exclusiva, intransferible y revocable para usar el Software únicamente
+   para fines internos y personales.
+
+3. RESTRICCIONES
+   El Licenciatario NO podrá:
+   a) Distribuir, sublicenciar, vender, alquilar o transferir el Software.
+   b) Realizar ingeniería inversa, descompilar o desensamblar el Software.
+   c) Modificar, adaptar o crear obras derivadas del Software.
+   d) Utilizar el Software para actividades ilegales o no éticas.
+   e) Eludir cualquier medida de protección o autenticación del Software.
+
+4. PROPIEDAD INTELECTUAL
+   El Software y todos los derechos de propiedad intelectual asociados son y
+   seguirán siendo propiedad exclusiva del Licenciante. Esta licencia no transfiere
+   ningún derecho de propiedad al Licenciatario.
+
+5. LIMITACIÓN DE RESPONSABILIDAD
+   EL SOFTWARE SE PROPORCIONA "TAL CUAL", SIN GARANTÍA DE NINGÚN TIPO, EXPRESA
+   O IMPLÍCITA. EL LICENCIANTE NO SERÁ RESPONSABLE DE NINGÚN DAÑO DIRECTO,
+   INDIRECTO, INCIDENTAL, ESPECIAL O CONSECUENTE DERIVADO DEL USO DEL SOFTWARE.
+
+6. HERRAMIENTAS DE SEGURIDAD
+   Este Software incluye herramientas de análisis de red y seguridad. El
+   Licenciatario se compromete a utilizar estas herramientas únicamente en
+   sistemas de su propiedad o con autorización explícita del propietario.
+   El uso no autorizado de estas herramientas puede violar leyes locales e
+   internacionales de ciberseguridad.
+
+7. RECOPILACIÓN DE DATOS
+   El Software opera de forma local y no recopila ni transmite datos personales
+   a servidores externos. Las credenciales de usuario se almacenan localmente
+   con cifrado. La integración con Ollama requiere un servicio local ejecutándose
+   en la máquina del usuario.
+
+8. TERMINACIÓN
+   Esta licencia se terminará automáticamente si el Licenciatario incumple
+   cualquier término. Upon termination, el Licenciatario debe destruir todas
+   las copias del Software.
+
+9. LEGISLACIÓN APLICABLE
+   Esta licencia se rige por las leyes de la República de Colombia. Cualquier
+   disputa será resuelta en los tribunales competentes de Bogotá, Colombia.
+
+10. CONTACTO
+    Para adquirir una licencia comercial, contactar al Licenciante a través
+    de los canales oficiales de distribución.
+
+---
+Versión 1.0 - Mayo 2026
