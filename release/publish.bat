@@ -31,7 +31,7 @@ if errorlevel 1 (
 git add .
 git commit -m "auto release" >nul 2>&1
 
-git push -u origin master
+git push -u origin main
 if errorlevel 1 (
     echo ERROR: push fallo en nethub-ultimate
     pause
@@ -52,7 +52,7 @@ if errorlevel 1 (
 git add .
 git commit -m "auto release" >nul 2>&1
 
-git push -u origin master
+git push -u origin main
 if errorlevel 1 (
     echo ERROR: push fallo en nethub-distro
     pause

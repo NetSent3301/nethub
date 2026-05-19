@@ -24,10 +24,13 @@ from collections import deque
 import math
 import bcrypt
 
-from NETHUB.core.core import UserManager, ConfigManager, ImprovedGLI, COLOR_SCHEMES
-from NETHUB.update_checker import UpdateChecker
-from NETHUB.modules import BaseModule, ModuleManager
-from NETHUB.src.core.modules.shared import ToolFrameContainer, AnimatedGraph
+# Add src directory to Python path to allow imports from src
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from core.core import UserManager, ConfigManager, ImprovedGLI, COLOR_SCHEMES
+from update_checker import UpdateChecker
+from modules import BaseModule, ModuleManager
+from modules.shared import ToolFrameContainer, AnimatedGraph
 
 # Helpers multiplataforma
 def get_system_root():
@@ -1116,7 +1119,8 @@ class NetHUBUltimate(ctk.CTk):
                 self.user_manager.login_google(email, name, avatar_url, avatar_local)
                 self.after(0, lambda: self.complete_login(email, f"Bienvenido {name}"))
             except Exception as e:
-                self.after(0, lambda: self.toast.show(f"Google login: {str(e)[:90]}", duration=4, type="error"))
+                error = str(e)
+                self.after(0, lambda: self.toast.show(f"Google login: {error[:90]}", duration=4, type="error"))
         
         threading.Thread(target=run_oauth, daemon=True).start()
     
@@ -2925,53 +2929,112 @@ class NetHUBUltimate(ctk.CTk):
         crear_gauge(mon_frame, "DISCO", self.colors["success"],
                     lambda: psutil.disk_usage(get_system_root()).percent)()
 
-        # ========== MODULOS ==========
-        sec_modules = seccion(scroll, "🧩 Módulos")
+        # ========== MODULOS / PLUGINS ==========
+        sec_modules = seccion(scroll, "🧩 Módulos y Plugins")
+
+        plugins_dir = self.module_manager.get_plugins_dir()
+        dir_info = ctk.CTkFrame(sec_modules, fg_color=self.colors["fg"], corner_radius=8)
+        dir_info.pack(fill="x", padx=15, pady=(5, 10))
+        ctk.CTkLabel(dir_info, text=f"📁 {plugins_dir}",
+                     font=("Arial", 9), text_color=self.colors["text_secondary"],
+                     anchor="w").pack(padx=10, pady=6)
 
         mod_list_frame = ctk.CTkFrame(sec_modules, fg_color="transparent")
-        mod_list_frame.pack(fill="x", padx=15, pady=(5, 10))
+        mod_list_frame.pack(fill="x", padx=15, pady=(0, 10))
 
         mod_info = self.module_manager.get_info()
-        mod_labels = []
 
         for m in mod_list_frame.winfo_children():
             m.destroy()
 
         for mod_data in mod_info:
+            is_custom = mod_data["custom"]
             row = ctk.CTkFrame(mod_list_frame, fg_color=self.colors["bg"], corner_radius=8)
             row.pack(fill="x", pady=3)
 
-            tag = "CUSTOM" if mod_data["custom"] else "SISTEMA"
-            tag_color = "#2a6a3a" if mod_data["custom"] else self.colors["accent"]
+            if mod_data.get("_is_plugin"):
+                tag = "PLUGIN"
+                tag_color = "#8a5a2a"
+            elif is_custom:
+                tag = "CUSTOM"
+                tag_color = "#2a6a3a"
+            else:
+                tag = "SISTEMA"
+                tag_color = self.colors["accent"]
 
-            icon_lbl = ctk.CTkLabel(row, text=mod_data["icon"], font=("Arial", 16), width=30)
-            icon_lbl.pack(side="left", padx=(10, 5))
+            ctk.CTkLabel(row, text=mod_data["icon"], font=("Arial", 16), width=30).pack(side="left", padx=(10, 5))
 
-            name_lbl = ctk.CTkLabel(row, text=mod_data["name"], font=("Arial", 12, "bold"),
-                                     text_color=self.colors["text"], anchor="w")
-            name_lbl.pack(side="left", fill="x", expand=True)
+            text_frame = ctk.CTkFrame(row, fg_color="transparent")
+            text_frame.pack(side="left", fill="x", expand=True)
 
-            tag_lbl = ctk.CTkLabel(row, text=tag, font=("Arial", 8, "bold"),
-                                   text_color="white", fg_color=tag_color, corner_radius=4, width=55)
-            tag_lbl.pack(side="right", padx=(5, 10))
+            name_row = ctk.CTkFrame(text_frame, fg_color="transparent")
+            name_row.pack(fill="x")
+            ctk.CTkLabel(name_row, text=mod_data["name"], font=("Arial", 12, "bold"),
+                         text_color=self.colors["text"], anchor="w").pack(side="left")
+
+            if mod_data.get("version"):
+                ctk.CTkLabel(name_row, text=f"v{mod_data['version']}",
+                             font=("Arial", 8), text_color=self.colors["text_secondary"]).pack(side="left", padx=(6, 0))
+
+            if mod_data.get("author"):
+                ctk.CTkLabel(name_row, text=f"por {mod_data['author']}",
+                             font=("Arial", 8), text_color=self.colors["text_secondary"]).pack(side="left", padx=(6, 0))
+
+            ctk.CTkLabel(text_frame, text=mod_data["description"],
+                         font=("Arial", 9), text_color=self.colors["text_secondary"],
+                         anchor="w").pack(fill="x")
+
+            ctk.CTkLabel(row, text=tag, font=("Arial", 8, "bold"),
+                         text_color="white", fg_color=tag_color, corner_radius=4, width=55).pack(side="right", padx=(5, 10))
+
+        btn_row = ctk.CTkFrame(sec_modules, fg_color="transparent")
+        btn_row.pack(pady=(0, 8))
 
         def reload_custom_modules():
             try:
                 self.module_manager.reload_custom()
                 win.destroy()
-                self.toast.show("Modulos personalizados recargados", type="success")
+                self.toast.show("Plugins recargados", type="success")
                 self.after(200, self.reload_ui)
             except Exception as e:
-                self.toast.show(f"Error recargando: {str(e)}", type="error")
+                self.toast.show(f"Error: {str(e)}", type="error")
 
-        reload_btn = ctk.CTkButton(sec_modules, text="🔄 Recargar modulos custom",
-                                   command=reload_custom_modules,
-                                   fg_color=self.colors["accent"], width=200)
-        reload_btn.pack(pady=(0, 10))
+        ctk.CTkButton(btn_row, text="🔄 Recargar plugins",
+                      command=reload_custom_modules,
+                      fg_color=self.colors["accent"], width=150).pack(side="left", padx=4)
+
+        def open_plugins_folder():
+            import subprocess
+            if platform.system() == "Windows":
+                os.startfile(plugins_dir)
+            else:
+                subprocess.Popen(["open", plugins_dir])
+
+        ctk.CTkButton(btn_row, text="📁 Abrir carpeta",
+                      command=open_plugins_folder,
+                      fg_color="transparent", hover_color=self.colors["hover"],
+                      text_color=self.colors["text_secondary"], border_width=1,
+                      border_color=self.colors["border"], width=130).pack(side="left", padx=4)
+
+        def create_plugin_dialog():
+            dialog = ctk.CTkInputDialog(text="Nombre del plugin:", title="Crear plugin")
+            name = dialog.get_input()
+            if not name or not name.strip():
+                return
+            folder = ModuleManager.create_plugin_template(plugins_dir, name.strip())
+            if folder:
+                self.toast.show(f"Plugin creado: {folder}", type="success")
+                self.after(100, lambda: self._open_plugin_readme(folder))
+            else:
+                self.toast.show("Error: el nombre ya existe o es invalido", type="error")
+
+        ctk.CTkButton(btn_row, text="✨ Nuevo plugin",
+                      command=create_plugin_dialog,
+                      fg_color=self.colors["accent"], width=130).pack(side="left", padx=4)
 
         mod_help = ctk.CTkLabel(sec_modules,
-                                text="Los modulos en modules/custom/ se cargan automaticamente.\n"
-                                     "Crea un archivo *_module.py que herede de BaseModule.",
+                                text="Suelta una carpeta con plugin.json + main.py en la carpeta plugins/.\n"
+                                     "O usa 'Nuevo plugin' para generar una plantilla.",
                                 font=("Arial", 9), text_color=self.colors["text_secondary"],
                                 justify="left")
         mod_help.pack(pady=(0, 5))
@@ -3419,15 +3482,24 @@ class NetHUBUltimate(ctk.CTk):
         btn_frame = ctk.CTkFrame(container, fg_color="transparent")
         btn_frame.pack(pady=10)
 
-        def download_and_close():
+        def start_download():
+            win.destroy()
+            self._download_with_progress(download_url)
+
+        ctk.CTkButton(btn_frame, text="📥 Descargar", command=start_download,
+                      fg_color=self.colors["accent"], hover_color=self.colors["hover"],
+                      width=160, height=35, font=("Arial", 12, "bold")).pack(side="left", padx=5)
+
+        def open_browser():
             if download_url:
                 import webbrowser
                 webbrowser.open(download_url)
-            win.destroy()
 
-        ctk.CTkButton(btn_frame, text="📥 Descargar", command=download_and_close,
-                      fg_color=self.colors["accent"], hover_color=self.colors["hover"],
-                      width=160, height=35, font=("Arial", 12, "bold")).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="🌐 Abrir en navegador", command=open_browser,
+                      fg_color="transparent", hover_color=self.colors["hover"],
+                      text_color=self.colors["text_secondary"],
+                      width=140, height=35, border_width=1,
+                      border_color=self.colors["border"]).pack(side="left", padx=5)
 
         if not mandatory:
             ctk.CTkButton(btn_frame, text="Ahora no", command=win.destroy,
@@ -3445,6 +3517,129 @@ class NetHUBUltimate(ctk.CTk):
         self.config_manager.config["update_url"] = url
         self.config_manager.save_config()
         self.toast.show("URL de actualizacion guardada", type="success")
+
+    def _open_plugin_readme(self, folder):
+        """Abre un mensaje con instrucciones después de crear un plugin."""
+        self.toast.show(f"Plugin creado en {folder}", type="success", duration=3)
+
+    def _download_with_progress(self, url):
+        """Muestra ventana de progreso y descarga la actualizacion."""
+        win = ctk.CTkToplevel(self)
+        win.title("Descargando actualización...")
+        win.geometry("460x230")
+        win.grab_set()
+        win.resizable(False, False)
+        win.attributes("-topmost", True)
+
+        container = ctk.CTkFrame(win, fg_color=self.colors["bg"])
+        container.pack(fill="both", expand=True, padx=20, pady=15)
+
+        ctk.CTkLabel(container, text="📥 Descargando NetHUB Ultimate",
+                     font=("Arial", 16, "bold"), text_color=self.colors["accent"]).pack(pady=(15, 5))
+
+        status_label = ctk.CTkLabel(container, text="Preparando descarga...",
+                                    font=("Arial", 11), text_color=self.colors["text_secondary"])
+        status_label.pack(pady=5)
+
+        progress = ctk.CTkProgressBar(container, width=380, height=22,
+                                      progress_color=self.colors["accent"])
+        progress.pack(pady=10)
+        progress.set(0)
+
+        size_label = ctk.CTkLabel(container, text="", font=("Arial", 9),
+                                  text_color=self.colors["text_secondary"])
+        size_label.pack()
+
+        btn_frame = ctk.CTkFrame(container, fg_color="transparent")
+        btn_frame.pack(pady=(12, 5))
+
+        cancel_flag = {"cancel": False}
+
+        def cancel_download():
+            cancel_flag["cancel"] = True
+            win.destroy()
+
+        cancel_btn = ctk.CTkButton(btn_frame, text="Cancelar", command=cancel_download,
+                                   fg_color="transparent", hover_color=self.colors["hover"],
+                                   text_color=self.colors["text_secondary"],
+                                   width=130, height=34, border_width=1,
+                                   border_color=self.colors["border"])
+        cancel_btn.pack()
+
+        def update_progress(downloaded, total, status):
+            self.after(0, lambda: _update_ui(downloaded, total, status))
+
+        def _update_ui(downloaded, total, status):
+            if cancel_flag["cancel"] or not win.winfo_exists():
+                return
+            try:
+                status_label.configure(text=status)
+                if total > 0:
+                    pct = max(0, min(1, downloaded / total))
+                    progress.set(pct)
+                    mb_dl = downloaded / (1024 * 1024)
+                    mb_tot = total / (1024 * 1024)
+                    size_label.configure(text=f"{mb_dl:.1f} MB / {mb_tot:.1f} MB")
+                else:
+                    progress.set(0.5)
+                    size_label.configure(text=f"{downloaded / 1024:.0f} KB descargados")
+            except Exception:
+                pass
+
+        def download_thread():
+            try:
+                filepath = self.updater.download_update(url, progress_callback=update_progress)
+                self.after(0, lambda: _download_finished(filepath))
+            except Exception:
+                self.after(0, lambda: _download_finished(None))
+
+        def _download_finished(filepath):
+            if cancel_flag["cancel"] or not win.winfo_exists():
+                return
+            try:
+                for w in btn_frame.winfo_children():
+                    w.destroy()
+
+                if filepath:
+                    status_label.configure(text="✅ Descarga completada")
+                    progress.set(1)
+                    size_label.configure(text="")
+
+                    def open_file():
+                        self.updater.run_installer(filepath)
+                        win.destroy()
+
+                    def open_folder():
+                        folder = os.path.dirname(filepath)
+                        if platform.system() == "Windows":
+                            os.startfile(folder)
+                        else:
+                            subprocess.Popen(["open", folder])
+                        win.destroy()
+
+                    row = ctk.CTkFrame(btn_frame, fg_color="transparent")
+                    row.pack()
+                    ctk.CTkButton(row, text="▶ Ejecutar", command=open_file,
+                                  fg_color=self.colors["accent"], hover_color=self.colors["hover"],
+                                  width=150, height=36, font=("Arial", 12, "bold")).pack(side="left", padx=8)
+                    ctk.CTkButton(row, text="📁 Abrir carpeta", command=open_folder,
+                                  fg_color="transparent", hover_color=self.colors["hover"],
+                                  text_color=self.colors["text_secondary"],
+                                  width=150, height=36, border_width=1,
+                                  border_color=self.colors["border"]).pack(side="left", padx=8)
+                else:
+                    status_label.configure(text="❌ Error en la descarga")
+                    progress.set(0)
+
+                    def close():
+                        win.destroy()
+                    ctk.CTkButton(btn_frame, text="Cerrar", command=close,
+                                  fg_color=self.colors["accent"], hover_color=self.colors["hover"],
+                                  width=130, height=36).pack()
+            except Exception:
+                pass
+
+        threading.Thread(target=download_thread, daemon=True).start()
 
     def create_floating_chat(self):
         """Crea el widget de chat flotante en la esquina inferior derecha"""

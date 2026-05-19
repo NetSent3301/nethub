@@ -1,12 +1,16 @@
 """
 PLANTILLA DE MODULO PERSONALIZADO PARA NETHUB
 ==============================================
-Copia este archivo y modifica:
-  1. El nombre de la clase (debe ser unico)
-  2. Los atributos: name, icon, description
-  3. El metodo build(parent) con tu logica
-
 Este archivo se cargara automaticamente al iniciar NetHUB.
+
+Forma FACIL de crear un plugin:
+  Settings → Modulos y Plugins → ✨ Nuevo plugin
+
+Forma MANUAL:
+  1. Crea una carpeta en plugins/ (junto al .exe o en la raiz del proyecto)
+  2. Agrega plugin.json (nombre, icono, descripcion)
+  3. Agrega main.py con tu clase que herede de BaseModule
+  4. Settings → Recargar plugins
 """
 
 import customtkinter as ctk
@@ -43,11 +47,13 @@ class EjemploModule(BaseModule):
 
         info_text = (
             "Este es un modulo personalizado.\n\n"
-            "Para crear tu propio modulo:\n"
-            "  1. Copia este archivo en modules/custom/\n"
-            "  2. Cambia el nombre de la clase\n"
-            "  3. Define name, icon y description\n"
-            "  4. Implementa build(parent)\n\n"
+            "Para crear tu propio plugin:\n"
+            "  1. Settings → Modulos y Plugins → ✨ Nuevo plugin\n"
+            "  2. Escribe el nombre y se genera la plantilla\n"
+            "  3. Edita plugins/<Nombre>/main.py\n"
+            "  4. Click en 'Recargar plugins'\n\n"
+            "Tambien puedes copiar este archivo a la carpeta\n"
+            "custom/ si prefieres el metodo clasico.\n\n"
             f"Clase: {self.__class__.__name__}\n"
             f"Nombre: {self.name}\n"
             f"Icono: {self.icon}"

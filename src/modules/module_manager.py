@@ -1,25 +1,46 @@
 import os
 import sys
+import json
 import importlib.util
 import inspect
+from pathlib import Path
+
+
+def _is_frozen():
+    return getattr(sys, "frozen", False)
+
+
+def _get_exe_dir():
+    if _is_frozen():
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent.parent.parent
 
 
 class ModuleManager:
-    """Gestiona el ciclo de vida de módulos: descubrimiento, registro, validación y recarga."""
-
     CUSTOM_MODULES_DIR = os.path.join(os.path.dirname(__file__), "custom")
 
     def __init__(self, app):
         self.app = app
         self._modules = {}
         self._loaded_files = {}
+        self._plugins_dir = self._resolve_plugins_dir()
+
+    def _resolve_plugins_dir(self):
+        if _is_frozen():
+            plugins = _get_exe_dir() / "plugins"
+        else:
+            plugins = _get_exe_dir() / "plugins"
+        plugins.mkdir(parents=True, exist_ok=True)
+        return str(plugins)
+
+    def get_plugins_dir(self):
+        return self._plugins_dir
 
     @property
     def modules(self):
         return self._modules
 
     def discover_builtin(self):
-        """Descubre módulos oficiales en la carpeta modules/."""
         dir_path = os.path.dirname(__file__)
         for fname in sorted(os.listdir(dir_path)):
             if not fname.endswith("_module.py") or fname.startswith("_"):
@@ -27,17 +48,82 @@ class ModuleManager:
             self._load_module_file(os.path.join(dir_path, fname), fname)
 
     def discover_custom(self):
-        """Descubre módulos personalizados en modules/custom/."""
-        if not os.path.exists(self.CUSTOM_MODULES_DIR):
-            os.makedirs(self.CUSTOM_MODULES_DIR, exist_ok=True)
-        for fname in sorted(os.listdir(self.CUSTOM_MODULES_DIR)):
-            if not fname.endswith("_module.py") or fname.startswith("_"):
-                continue
-            filepath = os.path.join(self.CUSTOM_MODULES_DIR, fname)
-            self._load_module_file(filepath, fname, custom=True)
+        self._discover_dir(self.CUSTOM_MODULES_DIR, custom=True)
+        self._discover_dir(self._plugins_dir, custom=True, plugin=True)
+
+    def _discover_dir(self, directory, custom=False, plugin=False):
+        if not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
+            return
+
+        for entry in sorted(os.listdir(directory)):
+            entry_path = os.path.join(directory, entry)
+
+            if os.path.isfile(entry_path) and entry.endswith("_module.py"):
+                self._load_module_file(entry_path, entry, custom=custom)
+            elif os.path.isdir(entry_path):
+                plugin_json = os.path.join(entry_path, "plugin.json")
+                main_py = os.path.join(entry_path, "main.py")
+                if os.path.isfile(plugin_json) and os.path.isfile(main_py):
+                    self._load_plugin_folder(entry_path, entry, custom=custom)
+
+    def _load_plugin_folder(self, folder_path, folder_name, custom=False):
+        if folder_path in self._loaded_files:
+            return
+
+        json_path = os.path.join(folder_path, "plugin.json")
+        main_path = os.path.join(folder_path, "main.py")
+
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+        except Exception as e:
+            print(f"[Plugin] Error leyendo plugin.json en {folder_name}: {e}")
+            return
+
+        mod_name = f"plugin_{folder_name}"
+        try:
+            spec = importlib.util.spec_from_file_location(mod_name, main_path)
+            if spec is None or spec.loader is None:
+                print(f"[Plugin] No se pudo cargar spec: {folder_name}")
+                return
+
+            module = importlib.util.module_from_spec(spec)
+            module.__package__ = "modules.plugins"
+            if custom:
+                sys.modules[f"modules.plugins.{mod_name}"] = module
+
+            spec.loader.exec_module(module)
+
+            for name, obj in inspect.getmembers(module, inspect.isclass):
+                if name in ("BaseModule", "ToolFrameContainer", "AnimatedGraph"):
+                    continue
+                if not hasattr(obj, "name") or not hasattr(obj, "icon"):
+                    continue
+                if not hasattr(obj, "build") or not callable(getattr(obj, "build", None)):
+                    continue
+
+                if metadata.get("name"):
+                    obj.name = metadata["name"]
+                if metadata.get("icon"):
+                    obj.icon = metadata["icon"]
+                if metadata.get("description"):
+                    obj.description = metadata["description"]
+
+                self._register_class(obj, folder_name, custom=custom)
+                instance = self._modules.get(obj.name)
+                if instance:
+                    instance._plugin_metadata = metadata
+                    instance._plugin_folder = folder_path
+
+            self._loaded_files[folder_path] = module
+
+        except Exception as e:
+            print(f"[Plugin] Error cargando {folder_name}: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _load_module_file(self, filepath, filename, custom=False):
-        """Carga un archivo .py y registra las clases que heredan de BaseModule."""
         if filepath in self._loaded_files:
             return
 
@@ -76,7 +162,6 @@ class ModuleManager:
             traceback.print_exc()
 
     def _register_class(self, cls, source_file, custom=False):
-        """Valida e instancia una clase de módulo."""
         if not hasattr(cls, "name") or not cls.name:
             return
 
@@ -96,7 +181,6 @@ class ModuleManager:
             print(f"[ModuleManager] Error instanciando {cls.__name__}: {e}")
 
     def register(self, cls):
-        """Registra manualmente una clase de módulo en runtime."""
         if not inspect.isclass(cls):
             raise TypeError(f"Se esperaba una clase, se recibió {type(cls)}")
         if not hasattr(cls, "name") or not hasattr(cls, "build"):
@@ -105,7 +189,6 @@ class ModuleManager:
         return cls.name in self._modules
 
     def unregister(self, module_name):
-        """Desregistra un módulo por nombre."""
         if module_name in self._modules:
             mod = self._modules.pop(module_name)
             if hasattr(mod, "on_deactivate"):
@@ -113,12 +196,10 @@ class ModuleManager:
                     mod.on_deactivate()
                 except:
                     pass
-            print(f"[ModuleManager] - Módulo desregistrado: {module_name}")
             return True
         return False
 
     def reload_custom(self):
-        """Recarga todos los módulos custom (útil para desarrollo en caliente)."""
         custom_modules = {
             name: mod for name, mod in self._modules.items()
             if getattr(mod, "_is_custom", False)
@@ -128,26 +209,108 @@ class ModuleManager:
 
         self._loaded_files = {
             path: mod for path, mod in self._loaded_files.items()
-            if not path.startswith(self.CUSTOM_MODULES_DIR)
+            if not path.startswith(self.CUSTOM_MODULES_DIR) and not path.startswith(self._plugins_dir)
         }
 
         self.discover_custom()
-        return len(self._modules) - len(custom_modules) + len(self._modules)
+        return len(self._modules)
 
     def get_info(self):
-        """Devuelve información de todos los módulos cargados."""
         info = []
         for name, mod in self._modules.items():
-            info.append({
+            entry = {
                 "name": name,
                 "icon": getattr(mod, "icon", ""),
                 "description": getattr(mod, "description", ""),
                 "custom": getattr(mod, "_is_custom", False),
                 "class": mod.__class__.__name__,
-            })
+            }
+            metadata = getattr(mod, "_plugin_metadata", None)
+            if metadata:
+                entry["version"] = metadata.get("version", "")
+                entry["author"] = metadata.get("author", "")
+                entry["_is_plugin"] = True
+            else:
+                entry["version"] = ""
+                entry["author"] = ""
+                entry["_is_plugin"] = False
+            info.append(entry)
         return info
 
     def load_all(self):
-        """Carga todos los módulos (built-in + custom)."""
         self.discover_builtin()
         self.discover_custom()
+
+    @staticmethod
+    def create_plugin_template(plugins_dir, name):
+        safe = "".join(c for c in name if c.isalnum() or c in " _-").strip().replace(" ", "_")
+        if not safe:
+            return None
+
+        folder = Path(plugins_dir) / safe
+        if folder.exists():
+            return None
+        folder.mkdir(parents=True)
+
+        plugin_json = {
+            "name": name,
+            "icon": "🧩",
+            "description": "Mi plugin personalizado",
+            "version": "1.0.0",
+            "author": "Desconocido"
+        }
+
+        main_py = f'''"""
+Plugin: {name}
+Generado automaticamente por NetHUB Ultimate
+"""
+import customtkinter as ctk
+from pathlib import Path
+import sys
+
+# Asegurar que el directorio raiz esta en el path para importar BaseModule
+_root = Path(__file__).resolve().parent.parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
+from src.modules.base_module import BaseModule
+
+
+class {safe}Module(BaseModule):
+    name = "{name}"
+    icon = "🧩"
+    description = "Mi plugin personalizado"
+
+    def build(self, parent):
+        colors = self.colors
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        header = ctk.CTkFrame(frame, fg_color=colors["fg"], corner_radius=15)
+        header.pack(fill="x", pady=(0, 20))
+
+        ctk.CTkLabel(
+            header,
+            text=f"{{self.icon}} {{self.name.upper()}}",
+            font=("Arial", 22, "bold"),
+            text_color=colors["text"],
+        ).pack(pady=20, padx=20)
+
+        content = ctk.CTkFrame(frame, fg_color=colors["fg"], corner_radius=12)
+        content.pack(fill="both", expand=True)
+
+        ctk.CTkLabel(
+            content,
+            text="¡Tu plugin funciona!",
+            font=("Arial", 14),
+            text_color=colors["text"],
+        ).pack(pady=30)
+'''
+
+        with open(os.path.join(folder, "plugin.json"), "w", encoding="utf-8") as f:
+            json.dump(plugin_json, f, indent=2, ensure_ascii=False)
+
+        with open(os.path.join(folder, "main.py"), "w", encoding="utf-8") as f:
+            f.write(main_py)
+
+        return str(folder)

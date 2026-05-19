@@ -68,7 +68,7 @@ echo =========================================
 echo   PASO 2: Generando version.json...
 echo =========================================
 
-set TODAY=%date:~6,4%-%date:~3,2%-%date:~0,2%
+for /f "tokens=1-3 delims=- " %%a in ('powershell -Command "Get-Date -Format yyyy-MM-dd"') do set TODAY=%%a
 
 (
 echo {
@@ -103,15 +103,16 @@ echo =========================================
 echo   PASO 3: Compilando .exe...
 echo =========================================
 
-if exist "%PROJECT_DIR%\__pycache__" rmdir /s /q "%PROJECT_DIR%\__pycache__"
-if exist "%PROJECT_DIR%\modules\__pycache__" rmdir /s /q "%PROJECT_DIR%\modules\__pycache__"
-if exist "%PROJECT_DIR%\modules\custom\__pycache__" rmdir /s /q "%PROJECT_DIR%\modules\custom\__pycache__"
+if exist "%PROJECT_DIR%\src\__pycache__" rmdir /s /q "%PROJECT_DIR%\src\__pycache__"
+if exist "%PROJECT_DIR%\src\modules\__pycache__" rmdir /s /q "%PROJECT_DIR%\src\modules\__pycache__"
+if exist "%PROJECT_DIR%\src\modules\custom\__pycache__" rmdir /s /q "%PROJECT_DIR%\src\modules\custom\__pycache__"
 if exist "%PROJECT_DIR%\tests\__pycache__" rmdir /s /q "%PROJECT_DIR%\tests\__pycache__"
+if exist "%PROJECT_DIR%\NETHUB" rmdir /s /q "%PROJECT_DIR%\NETHUB"
 if exist "%DIST_DIR%" rmdir /s /q "%DIST_DIR%"
 del /q "%PROJECT_DIR%\*.spec" 2>nul
 
 cd /d "%PROJECT_DIR%"
-pyinstaller --onefile --windowed --name="NetHUB_Ultimate" --icon=NONE main.py
+pyinstaller --onefile --windowed --name="NetHUB_Ultimate" --icon=NONE src\main.py
 
 if not exist "%DIST_DIR%\NetHUB_Ultimate.exe" (
     echo.
