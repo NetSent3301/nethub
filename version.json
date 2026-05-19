@@ -1,11 +1,14 @@
 {
-  "version": "1.0.0",
+  "version": "2.1.0",
   "release_date": "2026-05-18",
-  "min_version": "1.0.0",
-  "download_url": "https://github.com/NetSent3301/nethub/releases/download/v1.0.0/NetHUB_Ultimate_1.0.0.zip",
+  "min_version": "2.0.0",
+  "download_url": "https://github.com/NetSent3301/nethub/releases/download/v2.1.0/NetHUB_Ultimate_2.1.0.zip",
   "changelog": [
-    "Actualización general"
+    "Nuevo sistema de actualización con descarga in-app y barra de progreso",
+    "Sistema de plugins externos: crea y gestiona plugins desde Settings",
+    "Correcciones en scripts de release y compilación",
+    "Mejoras generales y optimizaciones"
   ],
   "mandatory": false,
-  "message": "Actualización a la versión 1.0.0"
+  "message": "NetHUB Ultimate 2.1.0 disponible — incluye sistema de actualizaciones y plugins"
 }
