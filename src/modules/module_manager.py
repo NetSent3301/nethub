@@ -40,12 +40,42 @@ class ModuleManager:
     def modules(self):
         return self._modules
 
+    BUILTIN_MODULES = [
+        "code_module", "crypto_module", "files_module", "hacking_module",
+        "monitor_module", "network_module", "notas_module", "osint_module",
+        "sandbox_module", "system_module", "utils_module",
+    ]
+
     def discover_builtin(self):
-        dir_path = os.path.dirname(__file__)
-        for fname in sorted(os.listdir(dir_path)):
-            if not fname.endswith("_module.py") or fname.startswith("_"):
-                continue
-            self._load_module_file(os.path.join(dir_path, fname), fname)
+        if _is_frozen():
+            for mod_name in self.BUILTIN_MODULES:
+                self._load_builtin_module(mod_name)
+        else:
+            dir_path = os.path.dirname(__file__)
+            for fname in sorted(os.listdir(dir_path)):
+                if not fname.endswith("_module.py") or fname.startswith("_"):
+                    continue
+                self._load_module_file(os.path.join(dir_path, fname), fname)
+
+    def _load_builtin_module(self, mod_name):
+        full_name = f"modules.{mod_name}"
+        if full_name in self._loaded_files:
+            return
+        try:
+            module = importlib.import_module(full_name)
+            for name, obj in inspect.getmembers(module, inspect.isclass):
+                if name in ("BaseModule", "ToolFrameContainer", "AnimatedGraph"):
+                    continue
+                if not hasattr(obj, "name") or not hasattr(obj, "icon"):
+                    continue
+                if not hasattr(obj, "build") or not callable(getattr(obj, "build", None)):
+                    continue
+                self._register_class(obj, f"{mod_name}.py")
+            self._loaded_files[full_name] = module
+        except Exception as e:
+            print(f"[ModuleManager] Error cargando {mod_name}: {e}")
+            import traceback
+            traceback.print_exc()
 
     def discover_custom(self):
         self._discover_dir(self.CUSTOM_MODULES_DIR, custom=True)
