@@ -265,15 +265,8 @@ Plugin: {name}
 Generado automaticamente por NetHUB Ultimate
 """
 import customtkinter as ctk
-from pathlib import Path
-import sys
 
-# Asegurar que el directorio raiz esta en el path para importar BaseModule
-_root = Path(__file__).resolve().parent.parent.parent
-if str(_root) not in sys.path:
-    sys.path.insert(0, str(_root))
-
-from src.modules.base_module import BaseModule
+from modules.base_module import BaseModule
 
 
 class {safe}Module(BaseModule):
