@@ -16,7 +16,7 @@ echo   5. Hace git commit en ambos repos
 echo.
 
 REM === CONFIG (cambiar una sola vez) ===
-set GITHUB_USER=TU_USUARIO
+set GITHUB_USER=NetSent3301
 set GITHUB_REPO_SRC=nethub-ultimate
 set GITHUB_REPO_DIST=nethub-distro
 set BRANCH=main
@@ -52,7 +52,9 @@ echo Cambios en esta version (uno por linea, Enter vacio para terminar):
 set CHANGELOG_COUNT=0
 
 :ADD_CHANGE
+set "ITEM="
 set /p ITEM="  - "
+if not defined ITEM goto DONE_CHANGELOG
 if "%ITEM%"=="" goto DONE_CHANGELOG
 set CHANGELOG_COUNT=!CHANGELOG_COUNT!+1
 set "CHANGELOG_!CHANGELOG_COUNT!=%ITEM%"
@@ -68,14 +70,14 @@ echo =========================================
 echo   PASO 2: Generando version.json...
 echo =========================================
 
-for /f "tokens=1-3 delims=- " %%a in ('powershell -Command "Get-Date -Format yyyy-MM-dd"') do set TODAY=%%a
+for /f "tokens=*" %%a in ('powershell -Command "Get-Date -Format yyyy-MM-dd"') do set TODAY=%%a
 
 (
 echo {
 echo   "version": "%VERSION%",
 echo   "release_date": "%TODAY%",
 echo   "min_version": "2.0.0",
-echo   "download_url": "https://github.com/%GITHUB_USER%/%GITHUB_REPO_DIST%/releases/download/v%VERSION%/NetHUB_Ultimate_%VERSION%.zip",
+echo   "download_url": "https://github.com/%GITHUB_USER%/%GITHUB_REPO_DIST%/raw/main/NetHUB_Ultimate.exe",
 echo   "changelog": [
 ) > "%PROJECT_DIR%\version.json"
 

@@ -204,10 +204,11 @@ class ConfigManager:
                     if "dashboard_layout" not in cfg: cfg["dashboard_layout"] = None
                     if "export_recommendations" not in cfg: cfg["export_recommendations"] = True
                     if "contact_enabled" not in cfg: cfg["contact_enabled"] = True
+                    if "skipped_update_version" not in cfg: cfg["skipped_update_version"] = ""
                     return cfg
                 except Exception:
                     pass
-        return {"theme": "dark", "custom_colors": None, "appearance_mode": "System", "sound_effects": True, "dashboard_layout": None, "export_recommendations": True, "contact_enabled": True}
+        return {"theme": "dark", "custom_colors": None, "appearance_mode": "System", "sound_effects": True, "dashboard_layout": None, "export_recommendations": True, "contact_enabled": True, "skipped_update_version": ""}
 
     def save_config(self):
         with open(self.config_file, 'w') as f:

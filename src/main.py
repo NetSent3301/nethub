@@ -43,7 +43,7 @@ ctk.set_default_color_theme("dark-blue")
 USERS_FILE = "users.json"
 CONFIG_FILE = "config.json"
 CHAT_HISTORY_FILE = "chat_history.json"
-GOOGLE_OAUTH_FILE = "google_oauth_client.json"
+GOOGLE_OAUTH_FILE = "config/google_oauth_client.json"
 
 # Sistema de notificaciones premium
 class ToastManager:
@@ -1123,10 +1123,33 @@ class NetHUBUltimate(ctk.CTk):
                 self.after(0, lambda: self.toast.show(f"Google login: {error[:90]}", duration=4, type="error"))
         
         threading.Thread(target=run_oauth, daemon=True).start()
-    
+
+    def _find_oauth_file(self):
+        candidates = []
+        if getattr(sys, 'frozen', False):
+            meipass = sys._MEIPASS
+            candidates.append(os.path.join(meipass, "google_oauth_client.json"))
+            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+            candidates.append(os.path.join(exe_dir, "config", "google_oauth_client.json"))
+            candidates.append(os.path.join(exe_dir, "google_oauth_client.json"))
+            candidates.append(os.path.join(os.path.dirname(exe_dir), "config", "google_oauth_client.json"))
+            candidates.append(os.path.join(os.path.dirname(exe_dir), "google_oauth_client.json"))
+        else:
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            candidates.append(os.path.join(base, "config", "google_oauth_client.json"))
+            candidates.append(os.path.join(base, "google_oauth_client.json"))
+        cwd = os.getcwd()
+        candidates.append(os.path.join(cwd, "config", "google_oauth_client.json"))
+        candidates.append(os.path.join(cwd, "google_oauth_client.json"))
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+        return None
+
     def google_oauth_flow(self):
-        if not os.path.exists(GOOGLE_OAUTH_FILE):
-            raise RuntimeError(f"Falta {GOOGLE_OAUTH_FILE}")
+        oauth_path = self._find_oauth_file()
+        if not oauth_path:
+            raise RuntimeError("Falta google_oauth_client.json en config/ o raíz del programa")
         
         import http.server
         import socketserver
@@ -1134,7 +1157,7 @@ class NetHUBUltimate(ctk.CTk):
         import urllib.parse
         import webbrowser
         
-        with open(GOOGLE_OAUTH_FILE, "r", encoding="utf-8") as f:
+        with open(oauth_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
         client_cfg = raw.get("installed") or raw.get("web") or raw
         client_id = client_cfg.get("client_id")
@@ -1168,7 +1191,7 @@ class NetHUBUltimate(ctk.CTk):
         
         with socketserver.TCPServer(("127.0.0.1", 0), OAuthHandler) as server:
             port = server.server_address[1]
-            redirect_uri = f"http://127.0.0.1:{port}/oauth2callback"
+            redirect_uri = f"http://localhost:{port}/oauth2callback"
             params = {
                 "client_id": client_id,
                 "redirect_uri": redirect_uri,
@@ -1181,7 +1204,11 @@ class NetHUBUltimate(ctk.CTk):
             auth_url = f"{auth_uri}?{urllib.parse.urlencode(params)}"
             webbrowser.open(auth_url)
             server.timeout = 180
-            server.handle_request()
+            deadline = time.time() + 180
+            while time.time() < deadline:
+                server.handle_request()
+                if result.get("code") or result.get("error"):
+                    break
         
         if result.get("error"):
             raise RuntimeError(result["error"])
@@ -1311,9 +1338,14 @@ class NetHUBUltimate(ctk.CTk):
                     if self.is_sidebar_collapsed:
                         self.sidebar_logo.configure(text="⚡")
                         self.toggle_btn.configure(text="▶")
+                        for sep, lbl in self._section_labels:
+                            lbl.configure(text="")
                     else:
                         self.sidebar_logo.configure(text="NETHUB")
                         self.toggle_btn.configure(text="☰")
+                        texts = ["PRINCIPAL", "MÓDULOS", "ASISTENTE"]
+                        for (sep, lbl), txt in zip(self._section_labels, texts):
+                            lbl.configure(text=txt)
                         
             run_anim()
             
@@ -1369,13 +1401,14 @@ class NetHUBUltimate(ctk.CTk):
         # Menús premium (Dashboard + Módulos + Chat)
         self.menu_buttons = []
         self.module_buttons = {}
+        self._section_labels = []
         menu_builders = []
 
-        # Dashboard (default - index 0)
+        self._add_section_separator("PRINCIPAL")
         self.menu_buttons.append(PremiumSidebarButton(self.sidebar_scroll, "🏠 Core Dashboard",
             lambda: self._show_dashboard_wrapper(), self.colors))
 
-        # Modules (sorted alphabetically)
+        self._add_section_separator("MÓDULOS")
         mod_idx = 1
         for mod_name in sorted(self.modules.keys()):
             mod = self.modules[mod_name]
@@ -1386,13 +1419,25 @@ class NetHUBUltimate(ctk.CTk):
             self.module_buttons[mod_name] = (btn, mod, mod_idx)
             mod_idx += 1
 
-        # Chat IA (default - last)
+        self._add_section_separator("ASISTENTE")
         self.menu_buttons.append(PremiumSidebarButton(self.sidebar_scroll, "🧠 Tactical Llama",
             lambda: self._show_chat_wrapper(), self.colors))
-        
+
         for btn in self.menu_buttons:
             btn.set_collapsed(True)
-            
+
+        # Perfil de usuario al pie del sidebar
+        self.sidebar_footer = ctk.CTkFrame(self.sidebar, fg_color=self.colors["fg"], corner_radius=0, height=50)
+        self.sidebar_footer.pack(side="bottom", fill="x")
+        self.sidebar_footer.pack_propagate(False)
+
+        self.sidebar_avatar = ctk.CTkLabel(self.sidebar_footer, text="",
+                                           font=("Arial", 18), fg_color="transparent")
+        self.sidebar_avatar.pack(side="left", padx=(15, 8), pady=5)
+        self._update_sidebar_footer()
+
+        self.sidebar_footer.bind("<Button-1>", lambda e: self.show_settings())
+
         # Canvas de ecualizador de audio premium al pie de la barra lateral
         self.eq_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent", height=60)
         self.eq_frame.pack(side="bottom", fill="x", pady=15, padx=10)
@@ -1449,6 +1494,22 @@ class NetHUBUltimate(ctk.CTk):
         if self.menu_buttons:
             self.menu_buttons[0].set_active(True)
     
+    def _add_section_separator(self, text):
+        sep = ctk.CTkFrame(self.sidebar_scroll, fg_color=self.colors["border"], height=1)
+        sep.pack(fill="x", padx=15, pady=(12, 2))
+        lbl = ctk.CTkLabel(self.sidebar_scroll, text=text, font=("Arial", 8, "bold"),
+                           text_color=self.colors["text_secondary"])
+        lbl.pack(fill="x", padx=(20, 0), pady=(0, 4))
+        self._section_labels.append((sep, lbl))
+
+    def _update_sidebar_footer(self):
+        try:
+            avatar = self.get_avatar_image(size=22)
+            self.sidebar_avatar.configure(image=avatar)
+            self.sidebar_avatar.image = avatar
+        except:
+            self.sidebar_avatar.configure(text="👤")
+
     def set_active_menu(self, active_btn):
         for btn in self.menu_buttons:
             btn.set_active(btn == active_btn)
@@ -3414,9 +3475,12 @@ class NetHUBUltimate(ctk.CTk):
         """Verifica actualizaciones en segundo plano al iniciar la app."""
         if not hasattr(self, "updater"):
             return
+        skipped = self.config_manager.config.get("skipped_update_version", "")
         def run_check():
             result = self.updater.check_for_updates()
             if result["available"] and not result["error"]:
+                if result["latest_version"] == skipped:
+                    return
                 self.after(0, lambda: self._show_update_dialog(result))
         threading.Thread(target=run_check, daemon=True).start()
 
@@ -3506,6 +3570,18 @@ class NetHUBUltimate(ctk.CTk):
                           fg_color="transparent", hover_color=self.colors["hover"],
                           text_color=self.colors["text_secondary"],
                           width=100, height=35, border_width=1,
+                          border_color=self.colors["border"]).pack(side="left", padx=5)
+
+            def skip_version():
+                self.config_manager.config["skipped_update_version"] = latest
+                self.config_manager.save_config()
+                win.destroy()
+                self.toast.show(f"Version {latest} omitida", type="info", duration=2)
+
+            ctk.CTkButton(btn_frame, text="Omitir esta versión", command=skip_version,
+                          fg_color="transparent", hover_color=self.colors["hover"],
+                          text_color=self.colors["text_secondary"],
+                          width=120, height=35, border_width=1,
                           border_color=self.colors["border"]).pack(side="left", padx=5)
         else:
             ctk.CTkLabel(container, text="Esta actualización es obligatoria.",
