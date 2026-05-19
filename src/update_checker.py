@@ -15,7 +15,7 @@ DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/NetSent3301/nethub-distr
 
 
 class UpdateChecker:
-    CURRENT_VERSION = "2.1.1"
+    CURRENT_VERSION = "2.2"
 
     def __init__(self, update_url=None):
         self.update_url = update_url or DEFAULT_UPDATE_URL

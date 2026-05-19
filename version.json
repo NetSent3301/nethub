@@ -1,11 +1,14 @@
 {
-  "version": "2.1.1",
+  "version": "2.2",
   "release_date": "2026-05-19",
   "min_version": "2.0.0",
   "download_url": "https://github.com/NetSent3301/nethub-distro/raw/main/NetHUB_Ultimate.exe",
   "changelog": [
-    "Fix: google oauth file not found"
+    "Nuevo modulo de tareas con recordatorios",
+    "Personalizacion de sidebar: separadores y pie de usuario",
+    "Fix: ruta de archivo OAuth y redirect URI",
+    "Skip version en dialogo de actualizacion"
   ],
-  "mandatory": true,
-  "message": "Nueva version 2.1.1 disponible."
+  "mandatory": false,
+  "message": "NetHUB Ultimate 2.2 disponible — nuevo modulo de tareas y mejoras en sidebar"
 }
