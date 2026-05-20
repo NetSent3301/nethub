@@ -23,6 +23,7 @@ from tkinter import filedialog, messagebox, scrolledtext, colorchooser
 from collections import deque
 import math
 import bcrypt
+from plyer import notification
 
 # Add src directory to Python path to allow imports from src
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -52,6 +53,16 @@ class ToastManager:
         self.active_toasts = []
         
     def show(self, message, duration=3, type="info"):
+        if type in ("warning", "error"):
+            try:
+                notification.notify(
+                    title=f"NetHUB Ultimate - {type.capitalize()}",
+                    message=message,
+                    app_name="NetHUB Ultimate",
+                    timeout=duration
+                )
+            except:
+                pass
         colors = {
             "info": {"bg": "#1a2f3b", "accent": "#2a6a8a", "icon": "ℹ️"},
             "success": {"bg": "#152e1f", "accent": "#2a6a3a", "icon": "✓"},

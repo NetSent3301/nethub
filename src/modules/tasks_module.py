@@ -1,5 +1,6 @@
 import os, json, datetime, threading, time
 import customtkinter as ctk
+from plyer import notification
 from .base_module import BaseModule
 
 TASKS_FILE = "tasks.json"
@@ -247,9 +248,17 @@ class TasksModule(BaseModule):
                             task["notified"] = True
                             _save_tasks(self._tasks)
                             title = task.get("title", "Sin título")
-                            self.app.after(0, lambda t=title: self.app.toast.show(
-                                f"⏰ Recordatorio: {t}", type="warning", duration=8
-                            ))
+                            try:
+                                notification.notify(
+                                    title="NetHUB Ultimate - Recordatorio",
+                                    message=title,
+                                    app_name="NetHUB Ultimate",
+                                    timeout=8
+                                )
+                            except:
+                                self.app.after(0, lambda t=title: self.app.toast.show(
+                                    f"⏰ Recordatorio: {t}", type="warning", duration=8
+                                ))
                     except:
                         continue
             except:
