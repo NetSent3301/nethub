@@ -11,11 +11,11 @@ from pathlib import Path
 
 import requests
 
-DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/NetSent3301/nethub-distro/main/version.json"
+DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/NetSent3301/nethub/main/version.json"
 
 
 class UpdateChecker:
-    CURRENT_VERSION = "2.2"
+    CURRENT_VERSION = "2.3.0"
 
     def __init__(self, update_url=None):
         self.update_url = update_url or DEFAULT_UPDATE_URL
