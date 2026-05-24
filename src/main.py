@@ -1205,6 +1205,57 @@ class NetHUBUltimate(ctk.CTk):
         state = secrets.token_urlsafe(24)
         result = {}
         
+        OAUTH_SUCCESS_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><title>NetHUB Ultimate - Autenticación</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#1a1a1a;border:1px solid #2a6a8a;border-radius:20px;padding:50px 60px;text-align:center;max-width:460px;box-shadow:0 0 60px rgba(42,106,138,.15)}
+.checkmark{width:80px;height:80px;border-radius:50%;background:#1a3a2a;border:3px solid #2aaa2a;display:flex;align-items:center;justify-content:center;margin:0 auto 25px;font-size:42px;color:#2aaa2a;animation:pulse 1.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(42,170,42,.4)}50%{box-shadow:0 0 0 20px rgba(42,170,42,0)}}
+h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#e0e0e0}
+p{font-size:14px;color:#a0a0a0;line-height:1.6;margin-bottom:25px}
+.badge{display:inline-block;background:#2a6a8a20;border:1px solid #2a6a8a40;border-radius:8px;padding:6px 18px;font-size:11px;color:#2a6a8a;margin-bottom:5px}
+.footer{font-size:11px;color:#606060;margin-top:10px}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #2a6a8a40;border-top-color:#2a6a8a;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style></head>
+<body>
+<div class="card">
+<div class="checkmark">&#10003;</div>
+<span class="badge">NetHUB Ultimate</span>
+<h1>Autenticación exitosa</h1>
+<p>Tu cuenta de Google se ha vinculado correctamente.<br>Ya podes volver a la aplicación.</p>
+<p><span class="spinner"></span>Esperando confirmación...</p>
+<div class="footer">Esta ventana se cerrará automáticamente</div>
+</div>
+<script>setTimeout(function(){window.close()},3000)</script>
+</body>
+</html>"""
+
+        OAUTH_ERROR_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><title>NetHUB Ultimate - Error</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#1a1a1a;border:1px solid #8a2a2a;border-radius:20px;padding:50px 60px;text-align:center;max-width:460px;box-shadow:0 0 60px rgba(138,42,42,.15)}
+.icon{width:80px;height:80px;border-radius:50%;background:#3a1a1a;border:3px solid #aa2a2a;display:flex;align-items:center;justify-content:center;margin:0 auto 25px;font-size:42px;color:#aa2a2a}
+h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#e0e0e0}
+p{font-size:14px;color:#a0a0a0;line-height:1.6}
+.badge{display:inline-block;background:#8a2a2a20;border:1px solid #8a2a2a40;border-radius:8px;padding:6px 18px;font-size:11px;color:#aa2a2a;margin-bottom:5px}
+</style></head>
+<body>
+<div class="card">
+<div class="icon">&#10007;</div>
+<span class="badge">NetHUB Ultimate</span>
+<h1>Autenticación cancelada</h1>
+<p>El inicio de sesión con Google no se completó.<br>Volvé a intentar desde la aplicación.</p>
+</div>
+</body>
+</html>"""
+
         class OAuthHandler(http.server.BaseHTTPRequestHandler):
             def do_GET(handler_self):
                 parsed = urllib.parse.urlparse(handler_self.path)
@@ -1216,11 +1267,12 @@ class NetHUBUltimate(ctk.CTk):
                 result["code"] = params.get("code", [""])[0]
                 result["state"] = params.get("state", [""])[0]
                 result["error"] = params.get("error", [""])[0]
+                has_error = bool(result.get("error"))
                 handler_self.send_response(200)
                 handler_self.send_header("Content-Type", "text/html; charset=utf-8")
                 handler_self.end_headers()
-                handler_self.wfile.write(b"<html><body><h2>Login completado. Puedes volver a NetHUB.</h2></body></html>")
-            
+                handler_self.wfile.write((OAUTH_ERROR_HTML if has_error else OAUTH_SUCCESS_HTML).encode("utf-8"))
+
             def log_message(self, format, *args):
                 return
         
