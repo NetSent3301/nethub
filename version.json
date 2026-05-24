@@ -1,14 +1,18 @@
 {
-  "version": "2.2",
-  "release_date": "2026-05-19",
+  "version": "2.3.0",
+  "release_date": "2026-05-23",
   "min_version": "2.0.0",
   "download_url": "https://github.com/NetSent3301/nethub-distro/raw/main/NetHUB_Ultimate.exe",
   "changelog": [
-    "Nuevo modulo de tareas con recordatorios",
-    "Personalizacion de sidebar: separadores y pie de usuario",
-    "Fix: ruta de archivo OAuth y redirect URI",
-    "Skip version en dialogo de actualizacion"
+    "Nueva arquitectura: EventBus pub/sub, API Registry y ScriptEngine",
+    "Nuevo modulo Script Console con editor de scripts y API explorer",
+    "Sistema de logging estructurado (reemplaza print() y except:pass)",
+    "Eliminacion de codigo duplicado (UserManager/ConfigManager en main.py)",
+    "Atajos de teclado: Ctrl+L bloquear, Ctrl+Shift+F chat, Escape cerrar",
+    "BaseModule extendido con event_map, api_commands y hooks",
+    "Modulos se auto-registran en la API automaticamente",
+    "Eventos de ciclo de vida: app.login, app.ready, system.locked/unlocked, module.activated"
   ],
   "mandatory": false,
-  "message": "NetHUB Ultimate 2.2 disponible — nuevo modulo de tareas y mejoras en sidebar"
+  "message": "NetHUB Ultimate 2.3.0 disponible — nueva arquitectura EventBus + API + Scripting"
 }

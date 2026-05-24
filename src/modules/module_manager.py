@@ -5,6 +5,10 @@ import importlib.util
 import inspect
 from pathlib import Path
 
+from core.logger import get_logger, log_exception
+
+logger = get_logger("module_manager")
+
 
 def _is_frozen():
     return getattr(sys, "frozen", False)
@@ -72,10 +76,8 @@ class ModuleManager:
                     continue
                 self._register_class(obj, f"{mod_name}.py")
             self._loaded_files[full_name] = module
-        except Exception as e:
-            print(f"[ModuleManager] Error cargando {mod_name}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            logger.error("Error cargando módulo %s", mod_name, exc_info=True)
 
     def discover_custom(self):
         self._discover_dir(self.CUSTOM_MODULES_DIR, custom=True)
@@ -107,15 +109,15 @@ class ModuleManager:
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 metadata = json.load(f)
-        except Exception as e:
-            print(f"[Plugin] Error leyendo plugin.json en {folder_name}: {e}")
+        except Exception:
+            logger.warning("Error leyendo plugin.json en %s", folder_name, exc_info=True)
             return
 
         mod_name = f"plugin_{folder_name}"
         try:
             spec = importlib.util.spec_from_file_location(mod_name, main_path)
             if spec is None or spec.loader is None:
-                print(f"[Plugin] No se pudo cargar spec: {folder_name}")
+                logger.warning("No se pudo cargar spec: %s", folder_name)
                 return
 
             module = importlib.util.module_from_spec(spec)
@@ -148,10 +150,8 @@ class ModuleManager:
 
             self._loaded_files[folder_path] = module
 
-        except Exception as e:
-            print(f"[Plugin] Error cargando {folder_name}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            logger.error("Error cargando plugin %s", folder_name, exc_info=True)
 
     def _load_module_file(self, filepath, filename, custom=False):
         if filepath in self._loaded_files:
@@ -161,7 +161,7 @@ class ModuleManager:
         try:
             spec = importlib.util.spec_from_file_location(mod_name, filepath)
             if spec is None or spec.loader is None:
-                print(f"[ModuleManager] No se pudo cargar spec: {filename}")
+                logger.warning("No se pudo cargar spec: %s", filename)
                 return
 
             module = importlib.util.module_from_spec(spec)
@@ -186,10 +186,8 @@ class ModuleManager:
 
             self._loaded_files[filepath] = module
 
-        except Exception as e:
-            print(f"[ModuleManager] Error cargando {filename}: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            logger.error("Error cargando módulo %s", filename, exc_info=True)
 
     def _register_class(self, cls, source_file, custom=False):
         if not hasattr(cls, "name") or not cls.name:
@@ -207,8 +205,19 @@ class ModuleManager:
 
             self._modules[cls.name] = instance
 
-        except Exception as e:
-            print(f"[ModuleManager] Error instanciando {cls.__name__}: {e}")
+            api = getattr(self.app, "api", None)
+            if api and getattr(instance, "api_commands", None):
+                api.register_module(instance)
+
+            events = getattr(self.app, "events", None)
+            if events and getattr(instance, "event_map", None):
+                events.subscribe_module(instance, instance.event_map)
+
+            if hasattr(instance, "on_api_registered"):
+                instance.on_api_registered(api)
+
+        except Exception:
+            logger.error("Error instanciando %s", cls.__name__, exc_info=True)
 
     def register(self, cls):
         if not inspect.isclass(cls):
@@ -224,8 +233,8 @@ class ModuleManager:
             if hasattr(mod, "on_deactivate"):
                 try:
                     mod.on_deactivate()
-                except:
-                    pass
+                except Exception:
+                    logger.debug("Error en on_deactivate de %s", module_name)
             return True
         return False
 

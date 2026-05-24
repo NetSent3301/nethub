@@ -10,9 +10,9 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 TEST_DIR = os.path.dirname(__file__)
-PROJECT_DIR = os.path.abspath(os.path.join(TEST_DIR, ".."))
+PROJECT_DIR = os.path.abspath(os.path.join(TEST_DIR, "..", "src"))
 sys.path.insert(0, PROJECT_DIR)
-os.chdir(PROJECT_DIR)
+os.chdir(os.path.abspath(os.path.join(TEST_DIR, "..")))
 
 
 def _setup_matplotlib_mocks():

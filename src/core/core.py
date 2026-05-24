@@ -9,6 +9,9 @@ import bcrypt
 import datetime
 import requests
 import re
+from .logger import get_logger, log_exception
+
+logger = get_logger("core")
 
 # Esquemas de color premium
 COLOR_SCHEMES = {
@@ -207,7 +210,7 @@ class ConfigManager:
                     if "skipped_update_version" not in cfg: cfg["skipped_update_version"] = ""
                     return cfg
                 except Exception:
-                    pass
+                    logger.warning("Error al parsear config.json, usando defaults")
         return {"theme": "dark", "custom_colors": None, "appearance_mode": "System", "sound_effects": True, "dashboard_layout": None, "export_recommendations": True, "contact_enabled": True, "skipped_update_version": ""}
 
     def save_config(self):
@@ -223,7 +226,8 @@ class ConfigManager:
             color = "".join(ch * 2 for ch in color)
         try:
             return tuple(int(color[i:i+2], 16) for i in (0, 2, 4))
-        except:
+        except Exception:
+            logger.debug("Error parsing hex color: %s", color)
             return (0, 0, 0)
 
     def _rgb_to_hex(self, rgb):
@@ -412,8 +416,8 @@ No uses markdown, listas, bloques de codigo ni comandos."""
                             chunk_callback(chunk, False)
                         if data.get("done"):
                             break
-                    except:
-                        pass
+                    except json.JSONDecodeError:
+                        logger.debug("JSON decode error en stream chunk")
 
             self.context.append({"role": "user", "content": prompt})
             self.context.append({"role": "assistant", "content": full_response})

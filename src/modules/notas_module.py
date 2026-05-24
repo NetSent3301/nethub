@@ -1,6 +1,9 @@
 import os, json, datetime, threading
 import customtkinter as ctk
 from .base_module import BaseModule
+from core.logger import get_logger
+
+logger = get_logger("notas")
 
 NOTES_DIR = "notes"
 NOTES_INDEX = os.path.join(NOTES_DIR, "index.json")
@@ -181,7 +184,8 @@ class NotesModule(BaseModule):
                     with open(os.path.join(NOTES_DIR, fname), "r") as f:
                         meta = json.load(f)
                     all_tags.update(meta.get("tags", []))
-                except: pass
+                except json.JSONDecodeError:
+                    logger.debug("Error parseando metadatos de nota: %s", fname)
         if not all_tags:
             ctk.CTkLabel(self.tag_frame, text="Sin etiquetas", font=("Arial", 9),
                         text_color=self.colors["text_secondary"]).pack(anchor="w")
@@ -303,7 +307,8 @@ class NotesModule(BaseModule):
             meta = _load_meta(self.current_file)
             tags = ", ".join(meta.get("tags", [])) or "sin etiquetas"
             self.status_label.configure(text=f"{lines} líneas · {words} palabras · {chars} chars · #{tags}")
-        except: pass
+        except Exception:
+            logger.debug("Error actualizando status de nota")
 
     # ── CREATE / DELETE ────────────────────────────────────────────
     def create_note(self):

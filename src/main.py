@@ -9,6 +9,8 @@ import time
 import requests
 import subprocess
 import sys
+import signal
+import atexit
 import random
 import re
 import socket
@@ -29,9 +31,15 @@ from plyer import notification
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.core import UserManager, ConfigManager, ImprovedGLI, COLOR_SCHEMES
+from core.logger import get_logger, log_exception
+from core.events import EventBus
+from core.api import API
+from core.scripting import ScriptEngine
 from update_checker import UpdateChecker
 from modules import BaseModule, ModuleManager
 from modules.shared import ToolFrameContainer, AnimatedGraph
+
+logger = get_logger("main")
 
 # Helpers multiplataforma
 def get_system_root():
@@ -61,8 +69,8 @@ class ToastManager:
                     app_name="NetHUB Ultimate",
                     timeout=duration
                 )
-            except:
-                pass
+            except Exception:
+                logger.debug("Notificación del sistema no disponible")
         colors = {
             "info": {"bg": "#1a2f3b", "accent": "#2a6a8a", "icon": "ℹ️"},
             "success": {"bg": "#152e1f", "accent": "#2a6a3a", "icon": "✓"},
@@ -565,7 +573,12 @@ class NetHUBUltimate(ctk.CTk):
         else:
             self.updater = UpdateChecker()
         self.toast = ToastManager(self)
-        
+
+        # Event Bus, API y Scripting
+        self.events = EventBus()
+        self.api = API(app=self)
+        self.scripts = ScriptEngine(api=self.api, events=self.events)
+
         # Configurar apariencia inicial desde el archivo de configuración
         app_mode = self.config_manager.config.get("appearance_mode", "System")
         ctk.set_appearance_mode(app_mode)
@@ -588,7 +601,15 @@ class NetHUBUltimate(ctk.CTk):
         self.module_buttons = {}
         self.module_manager = ModuleManager(self)
         self._init_modules()
+
+        # Keyboard shortcuts
+        self.bind("<Control-L>", lambda e: self.after(100, self.lock_screen))
+        self.bind("<Control-Shift-F>", lambda e: self._focus_floating_chat())
+        self.bind("<Escape>", self._handle_escape)
         
+        # Registrar comandos core de la API
+        self._register_core_api()
+
         # Frame principal
         self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.main_frame.pack(fill="both", expand=True)
@@ -738,7 +759,7 @@ class NetHUBUltimate(ctk.CTk):
                 ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
                 ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0004 | 0x0020)
             except Exception as e:
-                print(f"Error barra de tareas: {e}")
+                logger.warning("Error barra de tareas: %s", e)
                 
     def on_map(self, event):
         if event.widget == self:
@@ -1092,12 +1113,14 @@ class NetHUBUltimate(ctk.CTk):
         if self.config_manager.config.get("export_recommendations", True):
             success, msg = self.user_manager.export_user_recommendations(username)
             if success:
-                print(f"[INFO] {msg}")
+                logger.info("%s", msg)
             else:
-                print(f"[WARNING] No se pudo exportar datos: {msg}")
+                logger.warning("No se pudo exportar datos: %s", msg)
         
         self.show_main_app()
         self.toast.show(message or f"Bienvenido {self.current_display_name}", duration=2, type="success")
+        self.events.emit("app.login", username=username, display_name=self.current_display_name)
+        self.after(500, lambda: self.events.emit("app.ready"))
     
     def do_google_login(self):
         self.toast.show("Abriendo login de Google...", duration=2, type="info")
@@ -1125,7 +1148,8 @@ class NetHUBUltimate(ctk.CTk):
                         cache_path = os.path.join(cache_dir, f"{safe_name}.png")
                         img.save(cache_path)
                         avatar_local = cache_path
-                    except: pass
+                    except Exception:
+                        logger.debug("No se pudo cachear avatar de Google")
                 
                 self.user_manager.login_google(email, name, avatar_url, avatar_local)
                 self.after(0, lambda: self.complete_login(email, f"Bienvenido {name}"))
@@ -2324,7 +2348,8 @@ class NetHUBUltimate(ctk.CTk):
         try:
             from modules.notas_module import NotesModule
             NotesModule.build_dashboard_widget(self, right_col)
-        except: pass
+        except Exception:
+            logger.debug("Notes dashboard widget no disponible")
         
         # 2. Auditoría en Tiempo Real (Log Feed)
         log_card = ctk.CTkFrame(right_col, fg_color=self.colors["fg"], corner_radius=15)
@@ -2929,8 +2954,10 @@ class NetHUBUltimate(ctk.CTk):
         def clear_history():
             import glob
             for f in glob.glob("chat_history*.json"):
-                try: os.remove(f)
-                except: pass
+                try:
+                    os.remove(f)
+                except Exception:
+                    logger.debug("No se pudo eliminar %s", f)
             self.toast.show("Historial limpiado", type="success")
         ctk.CTkButton(sec_data, text="🗑️ Limpiar historial de chat", command=clear_history,
                      fg_color="#8a3a3a", hover_color="#aa4a4a", width=220).pack(pady=6, padx=15, anchor="w")
@@ -3281,8 +3308,8 @@ class NetHUBUltimate(ctk.CTk):
         lock_container = ctk.CTkFrame(self, fg_color="#000000")
         lock_container.place(x=0, y=0, relwidth=1.0, relheight=1.0)
         
-        # Keep track of active lock state
         self.system_locked = True
+        self.events.emit("system.locked")
         
         # Reproducir música de bloqueo mediante ffplay directamente (empezando en segundo 50)
         try:
@@ -3311,7 +3338,7 @@ class NetHUBUltimate(ctk.CTk):
             atexit.register(cleanup_zombie)
             self.toast.show(toast_msg, type="info")
         except Exception as e:
-            print(f"Error al reproducir música con ffplay: {e}")
+            logger.warning("Error al reproducir música con ffplay: %s", e)
         
         # Canvas for Matrix Rain — place() cubre 100% de pantalla detrás del card
         canvas = ctk.CTkCanvas(lock_container, bg="#000000", highlightthickness=0, width=W, height=H)
@@ -3398,10 +3425,10 @@ class NetHUBUltimate(ctk.CTk):
                         pass_entry.focus_set()
                         lock_container.grab_set()
                 except Exception:
-                    pass
+                    logger.debug("Error en focus del lock screen")
                 self.after(500, keep_top)
             except Exception:
-                pass
+                logger.debug("Error en keep_top del lock screen")
                 
         keep_top()
         
@@ -3427,10 +3454,11 @@ class NetHUBUltimate(ctk.CTk):
 
             if verified:
                 self.system_locked = False
+                self.events.emit("system.unlocked")
                 try:
                     self.play_sound("success")
-                except:
-                    pass
+                except Exception:
+                    logger.debug("Error reproduciendo sonido de unlock")
                 
                 # Detener la música de bloqueo de forma ultra segura
                 kill_zombie_music()
@@ -3671,7 +3699,7 @@ class NetHUBUltimate(ctk.CTk):
                     progress.set(0.5)
                     size_label.configure(text=f"{downloaded / 1024:.0f} KB descargados")
             except Exception:
-                pass
+                logger.debug("Error en callback de progreso de descarga")
 
         def download_thread():
             try:
@@ -3820,6 +3848,19 @@ class NetHUBUltimate(ctk.CTk):
         else:
             self.create_floating_chat()
 
+    def _handle_escape(self, event=None):
+        """Maneja la tecla Escape: cierra chat flotante si está abierto"""
+        if self.floating_chat_window and self.floating_chat_window.winfo_exists():
+            self.floating_chat_window.destroy()
+            self.floating_chat_window = None
+            return "break"
+
+    def _focus_floating_chat(self):
+        """Abre o enfoca el chat flotante"""
+        if not self.floating_chat_window or not self.floating_chat_window.winfo_exists():
+            self.create_floating_chat()
+        self.after(200, lambda: self.floating_chat_input.focus_set() if hasattr(self, 'floating_chat_input') and self.floating_chat_input.winfo_exists() else None)
+
     def _show_dashboard_wrapper(self):
         self._active_module = None
         self.current_menu = self.show_dashboard
@@ -3837,7 +3878,61 @@ class NetHUBUltimate(ctk.CTk):
         self.module_manager.load_all()
         self.modules = self.module_manager.modules
 
+    def _register_core_api(self):
+        api = self.api
+
+        api.register("system.toast", lambda msg, t="info", d=3: self.toast.show(msg, d, t),
+                     module="core", description="Muestra notificacion toast",
+                     params=[{"name": "msg", "type": "str"}, {"name": "t", "type": "str", "default": "info"},
+                             {"name": "d", "type": "int", "default": 3}])
+
+        api.register("system.lock", lambda: self.after(100, self.lock_screen),
+                     module="core", description="Bloquea la pantalla")
+
+        api.register("system.theme", lambda theme=None: self._api_set_theme(theme),
+                     module="core", description="Cambia o consulta el tema actual",
+                     params=[{"name": "theme", "type": "str", "default": None}])
+
+        api.register("ai.chat", lambda prompt: self.ollama.generate(prompt),
+                     module="core", description="Envia mensaje a la IA",
+                     params=[{"name": "prompt", "type": "str"}])
+
+        api.register("ai.quick", lambda prompt: self.ollama.generate_quick(prompt),
+                     module="core", description="Respuesta rapida de la IA",
+                     params=[{"name": "prompt", "type": "str"}])
+
+        api.register("app.reload", lambda: self.after(100, self.reload_ui),
+                     module="core", description="Recarga la interfaz")
+
+        api.register("app.quit", lambda: self.after(500, self.destroy),
+                     module="core", description="Cierra la aplicacion")
+
+        api.register("api.commands", lambda module=None: api.list_commands(module),
+                     module="core", description="Lista comandos disponibles",
+                     params=[{"name": "module", "type": "str", "default": None}])
+
+        api.register("api.execute", lambda name, **kw: self.api.execute_safe(name, **kw),
+                     module="core", description="Ejecuta un comando de la API",
+                     params=[{"name": "name", "type": "str"}, {"name": "kw", "type": "dict"}])
+
+        api.register("script.run", lambda code: self.scripts.run(code),
+                     module="core", description="Ejecuta un script",
+                     params=[{"name": "code", "type": "str"}])
+
+    def _api_set_theme(self, theme):
+        if theme is None:
+            return self.config_manager.config.get("theme", "dark")
+        valid = {"dark", "blood", "matrix", "cyber", "custom"}
+        if theme not in valid:
+            return {"error": f"Tema invalido. Opciones: {', '.join(valid)}"}
+        self.config_manager.config["theme"] = theme
+        self.config_manager.save_config()
+        self.update_colors()
+        self.reload_ui()
+        return {"ok": f"Tema cambiado a {theme}"}
+
     def activate_module(self, module):
+        prev = self._active_module
         self.clear_content()
         self._active_module = module
         self.current_menu = lambda m=module: self._show_module_ui(m)
@@ -3848,6 +3943,9 @@ class NetHUBUltimate(ctk.CTk):
                 break
         module.build(self.content_frame)
         module.on_activate()
+        if prev:
+            self.events.emit("module.deactivated", module=prev)
+        self.events.emit("module.activated", module=module)
 
     def _show_module_ui(self, module):
         self.clear_content()
@@ -3861,252 +3959,19 @@ class NetHUBUltimate(ctk.CTk):
             else:
                 self.current_menu()
 
-class UserManager:
-    def __init__(self):
-        self.users = {}
-        self.load_users()
-    
-    def load_users(self):
-        if os.path.exists(USERS_FILE):
-            with open(USERS_FILE, 'r') as f:
-                self.users = json.load(f)
-    
-    def save_users(self):
-        with open(USERS_FILE, 'w') as f:
-            json.dump(self.users, f)
-    
-    def register(self, username, password, avatar_path, email=""):
-        if username in self.users:
-            return False, "Usuario ya existe"
-        salt = bcrypt.gensalt(rounds=12)
-        hashed = bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
-        self.users[username] = {
-            "password": hashed,
-            "avatar": avatar_path,
-            "display_name": username,
-            "email": email,
-            "created": __import__("time").time(),
-            "last_login": None,
-            "failed_attempts": 0
-        }
-        self.save_users()
-        return True, "Registro exitoso"
-    
-    def login(self, username, password):
-        user = self.users.get(username)
-        if not user:
-            return False, "Usuario no existe"
-        if user.get("failed_attempts", 0) >= 5:
-            return False, "Cuenta bloqueada por intentos fallidos"
 
-        stored_hash = user.get("password", "")
-
-        if stored_hash.startswith("$2"):
-            if bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8')):
-                user["last_login"] = __import__("time").time()
-                user["failed_attempts"] = 0
-                self.save_users()
-                return True, user.get("avatar", "")
-        else:
-            legacy_hash = __import__("hashlib").sha256(password.encode()).hexdigest()
-            if stored_hash == legacy_hash:
-                salt = bcrypt.gensalt(rounds=12)
-                user["password"] = bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
-                user["last_login"] = __import__("time").time()
-                user["failed_attempts"] = 0
-                self.save_users()
-                return True, user.get("avatar", "")
-
-        user["failed_attempts"] = user.get("failed_attempts", 0) + 1
-        self.save_users()
-        remaining = 5 - user["failed_attempts"]
-        return False, f"Contraseña incorrecta ({remaining} intentos restantes)"
-
-    def login_google(self, email, name="", avatar_url="", avatar_local=""):
-        if email not in self.users:
-            self.users[email] = {
-                "password": "",
-                "avatar": avatar_local,
-                "auth_provider": "google",
-                "display_name": name,
-                "email": email,
-                "google_avatar": avatar_url,
-                "created": __import__("time").time(),
-                "last_login": None,
-                "failed_attempts": 0,
-                "google_linked": __import__("time").time()
-            }
-        else:
-            was_local = self.users[email].get("auth_provider") != "google"
-            self.users[email]["auth_provider"] = "google"
-            self.users[email]["display_name"] = name or self.users[email].get("display_name", "")
-            self.users[email]["google_avatar"] = avatar_url or self.users[email].get("google_avatar", "")
-            if avatar_local:
-                self.users[email]["avatar"] = avatar_local
-            if was_local:
-                self.users[email]["google_linked"] = __import__("time").time()
-        self.save_users()
-        return True, "Login con Google exitoso"
-
-    def rename_username(self, old_username, new_username):
-        if not new_username or new_username.strip() == "":
-            return False, "Nombre inválido"
-        if new_username in self.users:
-            return False, "Nombre ya registrado"
-        self.users[new_username] = self.users.pop(old_username)
-        self.save_users()
-        return True, "Nombre actualizado"
-        
-    def change_password(self, username, new_password):
-        if not new_password or len(new_password) < 4:
-            return False, "Mínimo 4 caracteres"
-        salt = bcrypt.gensalt(rounds=12)
-        self.users[username]["password"] = bcrypt.hashpw(new_password.encode('utf-8'), salt).decode('utf-8')
-        self.save_users()
-        return True, "Contraseña actualizada"
-
-class ConfigManager:
-    def __init__(self):
-        self.config = self.load_config()
-    
-    def load_config(self):
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'r') as f:
-                try:
-                    cfg = json.load(f)
-                    if "theme" not in cfg: cfg["theme"] = "dark"
-                    if "custom_colors" not in cfg: cfg["custom_colors"] = None
-                    if "appearance_mode" not in cfg: cfg["appearance_mode"] = "System"
-                    if "sound_effects" not in cfg: cfg["sound_effects"] = True
-                    if "dashboard_layout" not in cfg: cfg["dashboard_layout"] = None
-                    return cfg
-                except Exception:
-                    pass
-        return {"theme": "dark", "custom_colors": None, "appearance_mode": "System", "sound_effects": True, "dashboard_layout": None}
-    
-    def save_config(self):
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(self.config, f)
-    
-    def _hex_to_rgb(self, color):
-        color = str(color or "#000000").strip()
-        if not color.startswith("#"):
-            return (0, 0, 0)
-        color = color[1:]
-        if len(color) == 3:
-            color = "".join(ch * 2 for ch in color)
-        try:
-            return tuple(int(color[i:i+2], 16) for i in (0, 2, 4))
-        except:
-            return (0, 0, 0)
-    
-    def _rgb_to_hex(self, rgb):
-        r, g, b = [max(0, min(255, int(v))) for v in rgb]
-        return f"#{r:02x}{g:02x}{b:02x}"
-    
-    def _luminance(self, color):
-        r, g, b = self._hex_to_rgb(color)
-        channels = []
-        for value in (r, g, b):
-            value = value / 255
-            channels.append(value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4)
-        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
-    
-    def _mix(self, color, target, amount):
-        rgb = self._hex_to_rgb(color)
-        target_rgb = self._hex_to_rgb(target)
-        return self._rgb_to_hex(tuple(rgb[i] + (target_rgb[i] - rgb[i]) * amount for i in range(3)))
-    
-    def _readable_on(self, color):
-        return "#111111" if self._luminance(color) > 0.55 else "#ffffff"
-    
-    def _contrast_ratio(self, a, b):
-        lum_a = self._luminance(a)
-        lum_b = self._luminance(b)
-        high, low = max(lum_a, lum_b), min(lum_a, lum_b)
-        return (high + 0.05) / (low + 0.05)
-    
-    def _with_contrast_helpers(self, colors):
-        colors = colors.copy()
-        colors["on_bg"] = self._readable_on(colors.get("bg", "#000000"))
-        colors["on_fg"] = self._readable_on(colors.get("fg", "#000000"))
-        colors["on_hover"] = self._readable_on(colors.get("hover", colors.get("fg", "#000000")))
-        colors["on_accent"] = self._readable_on(colors.get("accent", "#2a6a8a"))
-        colors["on_active"] = self._readable_on(colors.get("active", colors.get("accent", "#2a6a8a")))
-        return colors
-    
-    def _ensure_accent_contrast(self, colors):
-        colors = colors.copy()
-        bg = colors.get("bg", "#000000")
-        fg = colors.get("fg", bg)
-        sidebar = colors.get("sidebar", bg)
-        accent = colors.get("accent", "#2a6a8a")
-        min_contrast = min(
-            self._contrast_ratio(accent, bg),
-            self._contrast_ratio(accent, fg),
-            self._contrast_ratio(accent, sidebar)
-        )
-        if min_contrast < 3:
-            target = "#ffffff" if max(self._luminance(bg), self._luminance(fg), self._luminance(sidebar)) < 0.45 else "#000000"
-            for amount in (0.45, 0.6, 0.75, 0.9):
-                candidate = self._mix(accent, target, amount)
-                candidate_contrast = min(
-                    self._contrast_ratio(candidate, bg),
-                    self._contrast_ratio(candidate, fg),
-                    self._contrast_ratio(candidate, sidebar)
-                )
-                if candidate_contrast >= 3 or amount == 0.9:
-                    colors["accent"] = candidate
-                    colors["active"] = candidate
-                    colors["accent_light"] = self._mix(candidate, "#ffffff" if target == "#000000" else "#000000", 0.18)
-                    break
-        return colors
-    
-    def _with_accessible_text(self, colors):
-        colors = colors.copy()
-        bg_lum = self._luminance(colors.get("bg", "#000000"))
-        fg_lum = self._luminance(colors.get("fg", colors.get("bg", "#000000")))
-        surface_lum = max(bg_lum, fg_lum)
-        
-        if surface_lum > 0.55:
-            colors["text"] = "#161616"
-            colors["text_secondary"] = "#444444"
-            colors["border"] = self._mix(colors.get("fg", "#ffffff"), "#000000", 0.22)
-            colors["hover"] = self._mix(colors.get("fg", "#ffffff"), "#000000", 0.12)
-            colors["sidebar"] = self._mix(colors.get("bg", "#ffffff"), "#000000", 0.06)
-        elif surface_lum > 0.32:
-            colors["text"] = "#101010"
-            colors["text_secondary"] = "#383838"
-            colors["border"] = self._mix(colors.get("fg", "#cccccc"), "#000000", 0.30)
-        else:
-            colors["text"] = "#e8e8e8"
-            colors["text_secondary"] = "#b5b5b5"
-        
-        colors = self._ensure_accent_contrast(colors)
-        return self._with_contrast_helpers(colors)
-    
-    def get_colors(self):
-        if self.config["theme"] == "custom" and self.config.get("custom_colors"):
-            return self._with_accessible_text(self.config["custom_colors"])
-        return self._with_contrast_helpers(COLOR_SCHEMES.get(self.config["theme"], COLOR_SCHEMES["dark"]))
 
 def kill_zombie_music():
     try:
-        # Intentar matar el árbol de procesos por PID (ffplay y sus hijos)
         if 'app' in globals() and hasattr(app, 'music_process'):
             pid = app.music_process.pid
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except:
-        pass
+    except Exception:
+        logger.debug("No se pudo matar proceso música por PID")
     try:
-        # Por seguridad extra e inmunidad a hilos huérfanos, matar ffplay.exe
         subprocess.run(["taskkill", "/F", "/IM", "ffplay.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except:
-        pass
-
-import signal
-import sys
-import atexit
+    except Exception:
+        logger.debug("No se pudo matar ffplay.exe")
 
 def signal_handler(sig, frame):
     kill_zombie_music()

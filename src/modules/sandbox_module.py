@@ -1,7 +1,10 @@
 import customtkinter as ctk
 from .base_module import BaseModule
+from core.logger import get_logger
 import random
 import time
+
+logger = get_logger("sandbox")
 
 
 class SandBoxModule(BaseModule):
@@ -186,7 +189,7 @@ class SandBoxModule(BaseModule):
         )
 
     def on_activate(self):
-        print("[SAND BOX] Activado")
+        logger.info("SandBox activado")
 
     def on_deactivate(self):
-        print("[SAND BOX] Desactivado")
+        logger.info("SandBox desactivado")

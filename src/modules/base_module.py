@@ -2,11 +2,24 @@ import customtkinter as ctk
 
 
 class BaseModule:
-    """Plantilla base para crear nuevos módulos en NetHUB."""
+    """Plantilla base para crear nuevos módulos en NetHUB.
+
+    Proporciona:
+    - Eventos: subscribe_event, emit_event, event_map
+    - API: api_commands (dict de comandos expuestos)
+    - Ciclo de vida: on_activate, on_deactivate, on_api_registered
+    """
 
     name = "Módulo sin nombre"
     icon = "📦"
     description = "Sin descripción"
+
+    # Mapeo de eventos -> metodos: {"evento": "nombre_metodo"}
+    event_map = {}
+
+    # Comandos de API expuestos: {"nombre": funcion|dict}
+    # Dict opcional: {"fn": func, "description": "...", "params": [...]}
+    api_commands = {}
 
     def __init__(self, app):
         self.app = app
@@ -23,10 +36,6 @@ class BaseModule:
         )
 
     def _build_tool_cards(self, parent, tools):
-        """Crea una lista vertical de tarjetas de herramientas.
-
-        tools: list of (title, description, command, icon)
-        """
         colors = self.colors
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.pack(fill="both", expand=True, padx=20)
@@ -65,8 +74,30 @@ class BaseModule:
                 width=90, height=30,
             ).pack(side="right")
 
+    def subscribe_event(self, event, callback=None):
+        events = getattr(self.app, "events", None)
+        if not events:
+            return
+        if callback:
+            events.subscribe(event, callback, module=self.__class__.__name__)
+        else:
+            events.subscribe_module(self, {event: event.replace(".", "_")})
+
+    def emit_event(self, event, **data):
+        events = getattr(self.app, "events", None)
+        if events:
+            events.emit(event, **data)
+
+    def emit_event_async(self, event, **data):
+        events = getattr(self.app, "events", None)
+        if events:
+            events.emit_async(event, **data)
+
     def on_activate(self):
         pass
 
     def on_deactivate(self):
+        pass
+
+    def on_api_registered(self, api):
         pass
