@@ -568,7 +568,7 @@ class NetHUBUltimate(ctk.CTk):
         self.config_manager = ConfigManager()
         self.ollama = ImprovedGLI()
         saved_update_url = self.config_manager.config.get("update_url", "")
-        if saved_update_url:
+        if saved_update_url and "/version.json" in saved_update_url:
             self.updater = UpdateChecker(update_url=saved_update_url)
         else:
             self.updater = UpdateChecker()
