@@ -1,0 +1,17 @@
+{
+  "id": "world-clock",
+  "name": "World Clock",
+  "version": "1.0.0",
+  "author": "NetHUB Community",
+  "description": "Reloj mundial con múltiples zonas horarias (UTC, EST, PST, CET, IST, JST, etc)",
+  "icon": "🌍",
+  "category": "utils",
+  "tags": ["clock", "time", "timezone", "world"],
+  "min_nethub_version": "2.4",
+  "license": "MIT",
+  "repository": "https://github.com/NetSent3301/nethub-marketplace",
+  "download_url": "https://github.com/NetSent3301/nethub-marketplace/archive/refs/heads/main.zip",
+  "screenshots": [],
+  "permissions": [],
+  "dependencies": []
+}

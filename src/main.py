@@ -623,7 +623,7 @@ class NetHUBUltimate(ctk.CTk):
                 if proc.status == BackgroundProcess.STATUS_COMPLETED and proc.meta.get("notify", True):
                     self.notify(f"Proceso completado: {proc.name}",
                                 f"Duración: {proc.duration:.1f}s | {proc.message or ''}",
-                                category="system", priority="normal", source="process")
+                                category="system", priority="low", source="process")
                 elif proc.status == BackgroundProcess.STATUS_FAILED:
                     self.notify(f"Proceso falló: {proc.name}",
                                 str(proc.error or "Error desconocido"),
@@ -1056,6 +1056,9 @@ class NetHUBUltimate(ctk.CTk):
     def notify(self, title, message, category="general", priority="normal", source=""):
         notif = self.notifications.add_notification(title, message, category, priority, source)
         self._update_notif_badge()
+        # Low priority: register in notification center but don't pop a toast
+        if priority == "low":
+            return notif
         toast_type = {"security": "warning", "system": "info", "learning": "info",
                       "general": "info", "task": "info", "network": "info"}.get(category, "info")
         if priority == "critical":
@@ -1858,14 +1861,14 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                     else:
                         self.sidebar_logo.configure(text="NETHUB")
                         self.toggle_btn.configure(text="☰")
-                        section_texts = ["PANEL PRINCIPAL", "SEGURIDAD", "HERRAMIENTAS",
-                                         "SISTEMA", "ORGANIZACIÓN", "ASISTENTE"]
+                        section_texts = ["PANEL PRINCIPAL", "TIENDA", "SEGURIDAD", "HERRAMIENTAS",
+                                         "SISTEMA", "ORGANIZACIÓN", "PLUGINS", "ASISTENTE"]
                         for i, (sep, lbl) in enumerate(self._section_labels):
                             txt = section_texts[i] if i < len(section_texts) else ""
                             lbl.configure(text=txt)
-                        
+
             run_anim()
-            
+
         # Botón de Toggle en la esquina superior izquierda
         self.toggle_btn = ctk.CTkButton(drag_area, text="☰", width=35, height=35,
                                         fg_color="transparent", hover_color=self.colors["hover"],
@@ -1873,7 +1876,7 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                                         command=toggle_sidebar)
         self.toggle_btn.configure(text="▶")
         self.toggle_btn.pack(side="left", padx=(10, 5))
-        
+
         ctk.CTkLabel(drag_area, text="NetHUB Ultimate", font=("Arial", 18, "bold"),
                     text_color=self.colors["text"]).pack(side="left", padx=10)
         
@@ -1938,6 +1941,7 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
 
         # ── Module categories ──
         MODULE_MAP = {
+            "marketplace": "Marketplace",
             "search": "Web Search", "hacking": "Port Scanner",
             "network": "Signals Recon", "osint": "OSINT & DarkNet",
             "crypto": "Cipher Deck", "code": "Hex Code Sandbox",
@@ -1947,11 +1951,19 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
             "notas": "Notas", "tasks": "Tareas",
         }
         MODULE_CATEGORIES = [
+            ("TIENDA",       ["marketplace"]),
             ("SEGURIDAD",    ["hacking", "network", "osint", "crypto"]),
             ("HERRAMIENTAS", ["search", "code", "files", "utils", "scripting"]),
             ("SISTEMA",      ["monitor", "system", "sandbox"]),
             ("ORGANIZACIÓN", ["notas", "tasks"]),
         ]
+        custom_modules = [
+            name for name in self.modules
+            if name not in MODULE_MAP.values()
+        ]
+        if custom_modules:
+            MODULE_CATEGORIES.append(("PLUGINS", custom_modules))
+
         mod_idx = 1
         for section_name, mod_keys in MODULE_CATEGORIES:
             self._add_section_separator(section_name)
@@ -2264,7 +2276,7 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
         active_points = []
         _seen_alerts = set()
 
-        def _notify_alert(alert_text, priority="high"):
+        def _notify_alert(alert_text, priority="low"):
             h = hashlib.md5(alert_text.encode()).hexdigest()[:8]
             if h in _seen_alerts:
                 return
@@ -2299,7 +2311,7 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                             a = f"Puerto HTTP {lport} abierto (sin cifrado)."
                             alerts.append(f"[ALERTA] {a}")
                             score -= 5
-                            _notify_alert(a, "normal")
+                            _notify_alert(a, "low")
                             
                     elif conn.status == 'ESTABLISHED' and conn.raddr:
                         rip = conn.raddr.ip
@@ -4854,6 +4866,10 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
     def _init_modules(self):
         self.module_manager.load_all()
         self.modules = self.module_manager.modules
+
+    def reload_modules(self):
+        self._init_modules()
+        self.after(0, self.show_main_app)
 
     def _register_core_api(self):
         api = self.api

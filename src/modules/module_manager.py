@@ -46,9 +46,9 @@ class ModuleManager:
 
     BUILTIN_MODULES = [
         "code_module", "crypto_module", "files_module", "hacking_module",
-        "monitor_module", "network_module", "notas_module", "osint_module",
-        "sandbox_module", "search_module", "system_module", "tasks_module",
-        "utils_module",
+        "marketplace_module", "monitor_module", "network_module", "notas_module", 
+        "osint_module", "sandbox_module", "search_module", "system_module", 
+        "tasks_module", "utils_module", "music_module",
     ]
 
     def discover_builtin(self):
@@ -187,7 +187,7 @@ class ModuleManager:
 
             self._loaded_files[filepath] = module
 
-        except Exception:
+        except Exception as e:
             logger.error("Error cargando módulo %s", filename, exc_info=True)
 
     def _register_class(self, cls, source_file, custom=False):

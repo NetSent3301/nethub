@@ -1,0 +1,12 @@
+{
+  "id": "ssl-analyzer",
+  "name": "SSL Certificate Analyzer",
+  "version": "1.0.0",
+  "author": "NetHUB Community",
+  "description": "Análisis profundo de certificados SSL/TLS y validación de seguridad",
+  "icon": "🔐",
+  "category": "security",
+  "tags": ["ssl", "tls", "certificados", "seguridad"],
+  "min_nethub_version": "2.4",
+  "license": "MIT"
+}
