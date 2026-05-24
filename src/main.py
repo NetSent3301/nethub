@@ -1217,20 +1217,19 @@ body{background:#0a0a0a;color:#e0e0e0;font-family:'Segoe UI',Arial,sans-serif;di
 h1{font-size:22px;font-weight:700;margin-bottom:8px;color:#e0e0e0}
 p{font-size:14px;color:#a0a0a0;line-height:1.6;margin-bottom:25px}
 .badge{display:inline-block;background:#2a6a8a20;border:1px solid #2a6a8a40;border-radius:8px;padding:6px 18px;font-size:11px;color:#2a6a8a;margin-bottom:5px}
-.footer{font-size:11px;color:#606060;margin-top:10px}
-.spinner{display:inline-block;width:14px;height:14px;border:2px solid #2a6a8a40;border-top-color:#2a6a8a;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:6px}
-@keyframes spin{to{transform:rotate(360deg)}}
+.btn{display:inline-block;background:#2a6a8a;color:#fff;border:none;border-radius:8px;padding:10px 28px;font-size:14px;cursor:pointer;text-decoration:none;transition:background .2s}
+.btn:hover{background:#3a8aaa}
+.footer{font-size:11px;color:#606060;margin-top:15px}
 </style></head>
 <body>
 <div class="card">
 <div class="checkmark">&#10003;</div>
 <span class="badge">NetHUB Ultimate</span>
 <h1>Autenticación exitosa</h1>
-<p>Tu cuenta de Google se ha vinculado correctamente.<br>Ya podes volver a la aplicación.</p>
-<p><span class="spinner"></span>Esperando confirmación...</p>
-<div class="footer">Esta ventana se cerrará automáticamente</div>
+<p>Tu cuenta de Google se vinculó correctamente.<br>Ya podés cerrar esta pestaña y volver a NetHUB.</p>
+<a class="btn" href="#" onclick="window.close()">Cerrar pestaña</a>
+<div class="footer">También podés cerrarla manualmente</div>
 </div>
-<script>setTimeout(function(){window.close()},3000)</script>
 </body>
 </html>"""
 
