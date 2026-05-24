@@ -26,6 +26,8 @@ config.json
 chat_history.json
 notes/
 assets/avatars/
+user_profile.json
+recommendations/
 
 # NetHUB - Credenciales (NUNCA commitear)
 google_oauth_client.json

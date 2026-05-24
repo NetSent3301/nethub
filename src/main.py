@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from PIL import Image, ImageTk, ImageDraw, ImageColor
+from PIL import Image, ImageTk, ImageDraw, ImageColor, ImageFilter
 import os
 import json
 import hashlib
@@ -35,6 +35,11 @@ from core.logger import get_logger, log_exception
 from core.events import EventBus
 from core.api import API
 from core.scripting import ScriptEngine
+from core.wallpaper import WallpaperManager
+from core.effects import apply_acrylic, apply_blur, remove_effects, set_window_opacity
+from core.notifications import NotificationManager, NOTIF_CATEGORIES
+from core.background import ProcessManager, BackgroundProcess
+from core.adaptation import AdaptationEngine
 from update_checker import UpdateChecker
 from modules import BaseModule, ModuleManager
 from modules.shared import ToolFrameContainer, AnimatedGraph
@@ -139,8 +144,8 @@ class ToastManager:
                 self.parent.play_sound(type)
             else:
                 self.parent.play_sound("click")
-        except:
-            pass
+        except Exception:
+            logger.debug("Toast sound error")
         
         # Animación de entrada (slide ease-out)
         def slide_in(step=0):
@@ -423,7 +428,8 @@ No uses markdown, listas, bloques de codigo ni comandos."""
         try:
             response = requests.get(f"{self.host}/api/tags", timeout=2)
             return response.status_code == 200
-        except:
+        except requests.RequestException as e:
+            logger.debug("Ollama connection failed: %s", e)
             return False
     
     def _clean_short_response(self, text, limit=140):
@@ -594,6 +600,45 @@ class NetHUBUltimate(ctk.CTk):
         
         # Colores
         self.update_colors()
+
+        # Wallpaper system
+        self.wallpaper = WallpaperManager(self.config_manager.get_wallpaper_config())
+        self._wallpaper_label = None
+        self._wallpaper_loaded = False
+        self._content_canvas = None
+        self._content_canvas_window = None
+        wp_path = self.config_manager.config.get("wallpaper", {}).get("path")
+        if wp_path:
+            self.wallpaper.load_wallpaper(wp_path)
+
+        # Notification system
+        self.notifications = NotificationManager(max_history=500)
+        self._notif_panel = None
+        self._notif_bell_btn = None
+        self._notif_sidebar_btn = None
+
+        # Background process system (notifies on completion)
+        def _on_proc_event(proc):
+            try:
+                if proc.status == BackgroundProcess.STATUS_COMPLETED and proc.meta.get("notify", True):
+                    self.notify(f"Proceso completado: {proc.name}",
+                                f"Duración: {proc.duration:.1f}s | {proc.message or ''}",
+                                category="system", priority="normal", source="process")
+                elif proc.status == BackgroundProcess.STATUS_FAILED:
+                    self.notify(f"Proceso falló: {proc.name}",
+                                str(proc.error or "Error desconocido"),
+                                category="system", priority="high", source="process")
+            except Exception:
+                pass
+        self.processes = ProcessManager(max_concurrent=6, notify_callback=_on_proc_event)
+
+        # Environmental adaptation
+        self.adaptation = AdaptationEngine()
+
+        # Unified animation control
+        self._animations = {}
+        self._main_loop_running = False
+        self._pwd_strength_timer = None
         
         # Module system
         self.modules = {}
@@ -613,6 +658,7 @@ class NetHUBUltimate(ctk.CTk):
         # Frame principal
         self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.main_frame.pack(fill="both", expand=True)
+        self.main_frame.bind("<Configure>", self._on_content_resize)
         
         # Bind arrastre y restauración
         self.bind("<ButtonPress-1>", self.start_drag)
@@ -767,6 +813,7 @@ class NetHUBUltimate(ctk.CTk):
             self.after(100, self.show_in_taskbar)
             
     def destroy(self):
+        self.stop_main_loop()
         kill_zombie_music()
         super().destroy()
         
@@ -800,12 +847,11 @@ class NetHUBUltimate(ctk.CTk):
         img = Image.new("RGBA", (size, size))
         draw = ImageDraw.Draw(img)
         for y in range(size):
-            for x in range(size):
-                t = (x + y) / (2 * size)
-                r = int(color1[0] + (color2[0] - color1[0]) * t)
-                g = int(color1[1] + (color2[1] - color1[1]) * t)
-                b = int(color1[2] + (color2[2] - color1[2]) * t)
-                img.putpixel((x, y), (r, g, b, 255))
+            t = y / size
+            r = int(color1[0] + (color2[0] - color1[0]) * t)
+            g = int(color1[1] + (color2[1] - color1[1]) * t)
+            b = int(color1[2] + (color2[2] - color1[2]) * t)
+            draw.line([(0, y), (size, y)], fill=(r, g, b, 255))
                 
         mask = Image.new("L", (size, size), 0)
         mask_draw = ImageDraw.Draw(mask)
@@ -837,10 +883,369 @@ class NetHUBUltimate(ctk.CTk):
         
         return ctk.CTkImage(light_image=circular_img, dark_image=circular_img, size=(size, size))
     
+    def _render_wallpaper(self):
+        """Render wallpaper on BOTH the Canvas (content bg) and root (for acrylic)."""
+        try:
+            if self._wallpaper_label:
+                try:
+                    self._wallpaper_label.destroy()
+                except Exception:
+                    self._wallpaper_label = None
+
+            if not self.wallpaper._wallpaper_pil:
+                self._wallpaper_label = None
+                self._wallpaper_loaded = False
+                if hasattr(self, '_content_canvas') and self._content_canvas.winfo_exists():
+                    self._content_canvas.delete("wp_bg")
+                    self._content_canvas.configure(bg=self.colors["bg"])
+                return
+
+            self._wallpaper_loaded = True
+            # Render on content Canvas
+            self._render_canvas_wallpaper()
+            # Render on root window for acrylic effect
+            self._render_root_wallpaper()
+        except Exception as e:
+            logger.debug("Wallpaper render error: %s", e)
+            self._wallpaper_label = None
+            self._wallpaper_loaded = False
+
+    def _render_canvas_wallpaper(self):
+        """Draw wallpaper on the content Canvas (visible underneath CTkFrames)."""
+        if not hasattr(self, '_content_canvas') or not self._content_canvas.winfo_exists():
+            return
+        try:
+            cw = self._content_canvas
+            w = cw.winfo_width()
+            h = cw.winfo_height()
+            if w < 10 or h < 10:
+                self.after(200, self._render_canvas_wallpaper)
+                return
+
+            mode = self.wallpaper.config.get("mode", "cover")
+            img = self.wallpaper._wallpaper_pil.copy()
+            img_w, img_h = img.size
+            if mode == "cover":
+                ratio = max(w / img_w, h / img_h)
+                new_w = int(img_w * ratio)
+                new_h = int(img_h * ratio)
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                left = (new_w - w) // 2
+                top = (new_h - h) // 2
+                img = img.crop((left, top, left + w, top + h))
+            else:
+                img = img.resize((w, h), Image.Resampling.LANCZOS)
+
+            blur = self.wallpaper.config.get("blur_radius", 0)
+            opacity = max(0.03, min(1.0, self.wallpaper.config.get("opacity", 0.3)))
+            if blur > 0:
+                img = img.filter(ImageFilter.GaussianBlur(radius=blur))
+            if opacity < 1.0:
+                if img.mode != "RGBA":
+                    img = img.convert("RGBA")
+                r, g, b, a = img.split()
+                a = a.point(lambda x: int(x * opacity))
+                img = Image.merge("RGBA", (r, g, b, a))
+                # Composite over theme bg so frame gaps blend nicely
+                bg_frame = Image.new("RGBA", img.size, self._hex_to_rgba(self.colors["bg"], 255))
+                img = Image.alpha_composite(bg_frame, img)
+
+            photo = ImageTk.PhotoImage(img)
+            cw.delete("wp_bg")
+            cw.create_image(0, 0, image=photo, anchor="nw", tags="wp_bg")
+            cw.image = photo
+        except Exception as e:
+            logger.debug("Canvas wallpaper render error: %s", e)
+
+    def _render_root_wallpaper(self):
+        """Render wallpaper as root-level Label for acrylic transparency."""
+        try:
+            w = max(100, self.winfo_width() or 1400)
+            h = max(100, self.winfo_height() or 850)
+
+            mode = self.wallpaper.config.get("mode", "cover")
+            img = self.wallpaper._wallpaper_pil.copy()
+            img_w, img_h = img.size
+            if mode == "cover":
+                ratio = max(w / img_w, h / img_h)
+                new_w = int(img_w * ratio)
+                new_h = int(img_h * ratio)
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                left = (new_w - w) // 2
+                top = (new_h - h) // 2
+                img = img.crop((left, top, left + w, top + h))
+            else:
+                img = img.resize((w, h), Image.Resampling.LANCZOS)
+
+            blur = self.wallpaper.config.get("blur_radius", 0)
+            if blur > 0:
+                img = img.filter(ImageFilter.GaussianBlur(radius=blur))
+
+            photo = ImageTk.PhotoImage(img)
+
+            import tkinter as tk
+            self._wallpaper_label = tk.Label(self, image=photo, borderwidth=0)
+            self._wallpaper_label.image = photo
+            self._wallpaper_label.place(x=0, y=0, relwidth=1, relheight=1)
+            self._wallpaper_label.lower()
+        except Exception as e:
+            logger.debug("Root wallpaper render error: %s", e)
+
+    def _hex_to_rgba(self, hex_color, alpha=255):
+        h = hex_color.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return (r, g, b, alpha)
+
+    def _on_content_resize(self, event):
+        if self._wallpaper_loaded and self.wallpaper._wallpaper_pil:
+            try:
+                if hasattr(self, '_resize_timer') and self._resize_timer:
+                    self.after_cancel(self._resize_timer)
+                if hasattr(self, '_canvas_resize_timer') and self._canvas_resize_timer:
+                    self.after_cancel(self._canvas_resize_timer)
+                self._resize_timer = self.after(400, self._render_wallpaper)
+            except Exception:
+                pass
+
+    def _fit_content_frame(self):
+        pass
+
+    def _on_canvas_resize(self, event):
+        pass
+
     def update_colors(self):
         self.colors = self.config_manager.get_colors()
         if hasattr(self, 'configure'):
             self.configure(fg_color=self.colors["bg"])
+
+    def _apply_acrylic_effect(self):
+        if not self.config_manager.get_glass_enabled():
+            # When glass is off, ensure root wallpaper is hidden
+            if self._wallpaper_label:
+                try:
+                    self._wallpaper_label.destroy()
+                except Exception:
+                    pass
+                self._wallpaper_label = None
+            return
+        try:
+            import ctypes as _ct
+            hwnd = _ct.windll.user32.GetParent(self.winfo_id())
+            opacity = self.wallpaper.config.get("glass_opacity", 0.2)
+            ok = apply_acrylic(hwnd, self.colors.get("bg", "#0a0a0a"), opacity)
+            if ok:
+                logger.debug("Acrylic effect applied")
+            # Re-render root wallpaper so it shows through acrylic
+            if self._wallpaper_loaded and self.wallpaper._wallpaper_pil:
+                self._render_root_wallpaper()
+        except Exception as e:
+            logger.debug("Acrylic not available: %s", e)
+
+    def _apply_wallpaper_theme(self):
+        colors = self.wallpaper.extract_colors()
+        if colors:
+            self.config_manager.config["theme"] = "custom"
+            self.config_manager.config["custom_colors"] = colors
+            self.config_manager.save_config()
+            self.update_colors()
+            self.reload_ui()
+            self.toast.show("Tema extraído del wallpaper!", type="success")
+
+    # ── Notification helpers ──────────────────────────────────────────
+
+    def notify(self, title, message, category="general", priority="normal", source=""):
+        notif = self.notifications.add_notification(title, message, category, priority, source)
+        self._update_notif_badge()
+        toast_type = {"security": "warning", "system": "info", "learning": "info",
+                      "general": "info", "task": "info", "network": "info"}.get(category, "info")
+        if priority == "critical":
+            toast_type = "error"
+        elif priority == "high":
+            toast_type = "warning"
+        self.toast.show(f"[{category.upper()}] {title}: {message}", type=toast_type)
+        return notif
+
+    def _update_notif_badge(self):
+        count = self.notifications.get_unread_count()
+        if self._notif_bell_btn and self._notif_bell_btn.winfo_exists():
+            badge = f"🔔" + (f"({count})" if count > 0 else "")
+            self._notif_bell_btn.configure(text=badge)
+        if self._notif_sidebar_btn and self._notif_sidebar_btn.winfo_exists():
+            new_text = f"🔔 Notificaciones ({count})" if count > 0 else "🔔 Notificaciones"
+            self._notif_sidebar_btn.full_text = new_text
+            if not self._notif_sidebar_btn.is_collapsed:
+                self._notif_sidebar_btn.text_label.configure(text=new_text)
+
+    def _toggle_notif_panel(self):
+        if self._notif_panel and self._notif_panel.winfo_exists():
+            try:
+                self._notif_panel.destroy()
+            except Exception:
+                pass
+            self._notif_panel = None
+            return
+        self._build_notif_panel()
+
+    def _build_notif_panel(self):
+        if self._notif_panel and self._notif_panel.winfo_exists():
+            try:
+                self._notif_panel.destroy()
+            except Exception:
+                pass
+        panel = ctk.CTkToplevel(self)
+        panel.overrideredirect(True)
+        panel.attributes("-topmost", True)
+        panel.configure(fg_color=self.colors["fg"])
+        panel_width = 400
+        panel_height = 500
+        # Position below bell button
+        if self._notif_bell_btn and self._notif_bell_btn.winfo_exists():
+            bx = self._notif_bell_btn.winfo_rootx()
+            by = self._notif_bell_btn.winfo_rooty()
+            bh = self._notif_bell_btn.winfo_height()
+            px = bx - panel_width + 40
+            py = by + bh + 2
+        else:
+            px = self.winfo_x() + self.winfo_width() - panel_width - 10
+            py = self.winfo_y() + 60
+        panel.geometry(f"{panel_width}x{panel_height}+{max(0,px)}+{max(0,py)}")
+
+        # Header
+        header = ctk.CTkFrame(panel, fg_color=self.colors["fg"], height=40)
+        header.pack(fill="x", padx=0, pady=0)
+        header.pack_propagate(False)
+        ctk.CTkLabel(header, text="Centro de Notificaciones",
+                     font=("Arial", 14, "bold"), text_color=self.colors["text"]).pack(side="left", padx=15)
+        unread = self.notifications.get_unread_count()
+        if unread > 0:
+            ctk.CTkButton(header, text="✓ Leer todo", command=lambda: self._notif_mark_all_read(panel),
+                         fg_color="transparent", hover_color=self.colors["hover"],
+                         text_color=self.colors["accent"], width=80, height=28).pack(side="right", padx=5)
+        ctk.CTkButton(header, text="✕", command=lambda: self._close_notif_panel(panel),
+                     fg_color="transparent", hover_color=self.colors["hover"],
+                     text_color=self.colors["text_secondary"], width=30, height=28).pack(side="right", padx=5)
+
+        # Scrollable notification list
+        scroll = ctk.CTkScrollableFrame(panel, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=5, pady=5)
+
+        notifs = self.notifications.get_notifications(limit=100)
+        if not notifs:
+            ctk.CTkLabel(scroll, text="Sin notificaciones",
+                         font=("Arial", 12), text_color=self.colors["text_secondary"]).pack(pady=40)
+        else:
+            for n in notifs:
+                self._notif_card(scroll, n)
+
+        self._notif_panel = panel
+
+    def _notif_card(self, parent, notif):
+        bg = self.colors["hover"] if not notif.read else self.colors["bg"]
+        card = ctk.CTkFrame(parent, fg_color=bg, corner_radius=8)
+        card.pack(fill="x", pady=2, padx=2)
+        card.bind("<Button-1>", lambda e: self._notif_click(notif.id))
+
+        row1 = ctk.CTkFrame(card, fg_color="transparent")
+        row1.pack(fill="x", padx=10, pady=(6, 0))
+        ctk.CTkLabel(row1, text=f"{notif.category_icon} {notif.title}",
+                     font=("Arial", 11, "bold"), text_color=self.colors["text"],
+                     anchor="w").pack(side="left")
+        ctk.CTkLabel(row1, text=notif.time_ago,
+                     font=("Arial", 9), text_color=self.colors["text_secondary"],
+                     anchor="e").pack(side="right")
+
+        row2 = ctk.CTkFrame(card, fg_color="transparent")
+        row2.pack(fill="x", padx=10, pady=(2, 6))
+        ctk.CTkLabel(row2, text=notif.message,
+                     font=("Arial", 10), text_color=self.colors["text_secondary"],
+                     anchor="w", wraplength=330, justify="left").pack(side="left")
+
+        if not notif.read:
+            dot = ctk.CTkLabel(card, text="●", text_color=notif.category_color,
+                               font=("Arial", 8))
+            dot.place(relx=1.0, rely=0.5, anchor="e", x=-5)
+
+    def _notif_click(self, notif_id):
+        self.notifications.mark_read(notif_id)
+        self._update_notif_badge()
+        if self._notif_panel and self._notif_panel.winfo_exists():
+            self._build_notif_panel()
+
+    def _notif_mark_all_read(self, panel):
+        self.notifications.mark_all_read()
+        self._update_notif_badge()
+        if panel.winfo_exists():
+            self._build_notif_panel()
+
+    def _close_notif_panel(self, panel=None):
+        if panel and panel.winfo_exists():
+            try:
+                panel.destroy()
+            except Exception:
+                pass
+        self._notif_panel = None
+
+    def _load_notif_feed(self, parent):
+        """Fill a scrollable frame with latest notifications."""
+        for w in parent.winfo_children():
+            w.destroy()
+        notifs = self.notifications.get_notifications(limit=5)
+        if not notifs:
+            ctk.CTkLabel(parent, text="Sin actividad reciente",
+                         font=("Arial", 10), text_color=self.colors["text_secondary"]).pack(pady=15)
+            return
+        for n in notifs:
+            bg = self.colors["hover"] if not n.read else self.colors["bg"]
+            row = ctk.CTkFrame(parent, fg_color=bg, corner_radius=6)
+            row.pack(fill="x", pady=1)
+            ctk.CTkLabel(row, text=f"{n.category_icon} {n.title}",
+                         font=("Arial", 10, "bold"), text_color=self.colors["text"],
+                         anchor="w").pack(side="left", padx=(8, 4), pady=4)
+            ctk.CTkLabel(row, text=n.time_ago, font=("Arial", 8),
+                         text_color=self.colors["text_secondary"],
+                         anchor="e").pack(side="right", padx=8)
+
+    def start_main_loop(self, fps=30):
+        if self._main_loop_running:
+            return
+        self._main_loop_running = True
+        self._main_loop_interval = max(16, int(1000 / fps))
+        self._main_loop()
+
+    def stop_main_loop(self):
+        self._main_loop_running = False
+
+    def register_animation(self, name, callback, interval_ms=50):
+        if not callable(callback):
+            return
+        self._animations[name] = {"callback": callback, "interval": max(16, interval_ms), "last_run": 0, "enabled": True}
+
+    def unregister_animation(self, name):
+        self._animations.pop(name, None)
+
+    def set_animation_enabled(self, name, enabled):
+        if name in self._animations:
+            self._animations[name]["enabled"] = enabled
+
+    def _main_loop(self):
+        if not self._main_loop_running:
+            return
+        try:
+            import time
+            now = time.time()
+            for name, anim in list(self._animations.items()):
+                if not anim.get("enabled", True):
+                    continue
+                elapsed = now - anim.get("last_run", 0)
+                if elapsed * 1000 >= anim["interval"]:
+                    try:
+                        anim["callback"]()
+                    except Exception:
+                        pass
+                    anim["last_run"] = now
+        except Exception:
+            pass
+        self.after(self._main_loop_interval, self._main_loop)
     
     def start_drag(self, event):
         if getattr(self, "is_maximized", False):
@@ -1054,8 +1459,13 @@ class NetHUBUltimate(ctk.CTk):
         else:
             entry.configure(show="*")
             btn.configure(text="👁")
-    
+
     def _update_password_strength(self):
+        if self._pwd_strength_timer:
+            self.after_cancel(self._pwd_strength_timer)
+        self._pwd_strength_timer = self.after(150, self._do_password_strength)
+
+    def _do_password_strength(self):
         pwd = self.reg_pass.get()
         score = 0
         if len(pwd) >= 6: score += 25
@@ -1363,6 +1773,23 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
             self.toast.show(msg, duration=2, type="error")
     
     def show_main_app(self):
+        try:
+            self._build_main_app()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.toast.show(f"Error al cargar interfaz: {e}", type="error", duration=8)
+            # Crear fallback mínimo
+            for w in self.main_frame.winfo_children():
+                w.destroy()
+            fb = ctk.CTkFrame(self.main_frame, fg_color=self.colors["bg"])
+            fb.pack(fill="both", expand=True)
+            ctk.CTkLabel(fb, text="Error al cargar la interfaz. Revisa la consola.",
+                         text_color=self.colors["error"]).pack(pady=40)
+            ctk.CTkButton(fb, text="Reintentar", command=self.show_main_app,
+                         fg_color=self.colors["accent"]).pack()
+
+    def _build_main_app(self):
         for widget in self.main_frame.winfo_children():
             widget.destroy()
         
@@ -1376,6 +1803,8 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
         # Sidebar premium (definido antes para el toggle)
         main_panel = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         main_panel.pack(fill="both", expand=True)
+        
+        self._main_panel = main_panel
         
         self.sidebar = ctk.CTkFrame(main_panel, width=75, fg_color=self.colors["sidebar"], corner_radius=0)
         self.sidebar.pack(side="left", fill="y", expand=False)
@@ -1429,8 +1858,10 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                     else:
                         self.sidebar_logo.configure(text="NETHUB")
                         self.toggle_btn.configure(text="☰")
-                        texts = ["PRINCIPAL", "MÓDULOS", "ASISTENTE"]
-                        for (sep, lbl), txt in zip(self._section_labels, texts):
+                        section_texts = ["PANEL PRINCIPAL", "SEGURIDAD", "HERRAMIENTAS",
+                                         "SISTEMA", "ORGANIZACIÓN", "ASISTENTE"]
+                        for i, (sep, lbl) in enumerate(self._section_labels):
+                            txt = section_texts[i] if i < len(section_texts) else ""
                             lbl.configure(text=txt)
                         
             run_anim()
@@ -1470,10 +1901,15 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
         btn_frame = ctk.CTkFrame(self.top_bar, fg_color="transparent")
         btn_frame.pack(side="right", padx=10)
         
-        ctk.CTkButton(btn_frame, text="�", width=35, height=35, command=self.toggle_floating_chat,
+        self._notif_bell_btn = ctk.CTkButton(btn_frame, text="🔔", width=35, height=35,
+                                            command=self._toggle_notif_panel,
+                                            fg_color="transparent", hover_color=self.colors["hover"],
+                                            text_color=self.colors["text"])
+        self._notif_bell_btn.pack(side="left", padx=2)
+        ctk.CTkButton(btn_frame, text="💬", width=35, height=35, command=self.toggle_floating_chat,
                      fg_color="transparent", hover_color=self.colors["hover"],
                      text_color=self.colors["text"]).pack(side="left", padx=2)
-        ctk.CTkButton(btn_frame, text="�🔒", width=35, height=35, command=self.lock_screen,
+        ctk.CTkButton(btn_frame, text="🔒", width=35, height=35, command=self.lock_screen,
                      fg_color="transparent", hover_color=self.colors["hover"],
                      text_color=self.colors["text"]).pack(side="left", padx=2)
         ctk.CTkButton(btn_frame, text="⚙️", width=35, height=35, command=self.show_settings,
@@ -1488,23 +1924,51 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
         self.menu_buttons = []
         self.module_buttons = {}
         self._section_labels = []
+        self._section_texts = []
         menu_builders = []
 
-        self._add_section_separator("PRINCIPAL")
+        # ── PANEL ──
+        self._add_section_separator("PANEL PRINCIPAL")
         self.menu_buttons.append(PremiumSidebarButton(self.sidebar_scroll, "🏠 Core Dashboard",
             lambda: self._show_dashboard_wrapper(), self.colors))
+        self._notif_sidebar_btn = PremiumSidebarButton(
+            self.sidebar_scroll, "🔔 Notificaciones", self._toggle_notif_panel, self.colors)
+        self._update_notif_badge()
+        self.menu_buttons.append(self._notif_sidebar_btn)
 
-        self._add_section_separator("MÓDULOS")
+        # ── Module categories ──
+        MODULE_MAP = {
+            "search": "Web Search", "hacking": "Port Scanner",
+            "network": "Signals Recon", "osint": "OSINT & DarkNet",
+            "crypto": "Cipher Deck", "code": "Hex Code Sandbox",
+            "files": "Secure Vault", "utils": "Aux Diagnostics",
+            "scripting": "Script Console", "monitor": "Live Sentinel",
+            "system": "Kernel Telemetry", "sandbox": "Caja de Arena",
+            "notas": "Notas", "tasks": "Tareas",
+        }
+        MODULE_CATEGORIES = [
+            ("SEGURIDAD",    ["hacking", "network", "osint", "crypto"]),
+            ("HERRAMIENTAS", ["search", "code", "files", "utils", "scripting"]),
+            ("SISTEMA",      ["monitor", "system", "sandbox"]),
+            ("ORGANIZACIÓN", ["notas", "tasks"]),
+        ]
         mod_idx = 1
-        for mod_name in sorted(self.modules.keys()):
-            mod = self.modules[mod_name]
-            def make_module_cmd(m):
-                return lambda: self.activate_module(m)
-            btn = PremiumSidebarButton(self.sidebar_scroll, mod.menu_label, make_module_cmd(mod), self.colors)
-            self.menu_buttons.append(btn)
-            self.module_buttons[mod_name] = (btn, mod, mod_idx)
-            mod_idx += 1
+        for section_name, mod_keys in MODULE_CATEGORIES:
+            self._add_section_separator(section_name)
+            for key in mod_keys:
+                mod_name = MODULE_MAP.get(key, key)
+                if mod_name not in self.modules:
+                    continue
+                mod = self.modules[mod_name]
+                def make_module_cmd(m):
+                    return lambda: self.activate_module(m)
+                btn = PremiumSidebarButton(self.sidebar_scroll, mod.menu_label,
+                                           make_module_cmd(mod), self.colors)
+                self.menu_buttons.append(btn)
+                self.module_buttons[key] = (btn, mod, mod_idx)
+                mod_idx += 1
 
+        # ── IA ──
         self._add_section_separator("ASISTENTE")
         self.menu_buttons.append(PremiumSidebarButton(self.sidebar_scroll, "🧠 Tactical Llama",
             lambda: self._show_chat_wrapper(), self.colors))
@@ -1535,30 +1999,31 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
         self.eq_label.pack()
         
         eq_bars = [5, 12, 8, 15, 6, 18, 10, 14, 7, 11]
-        
+        self._eq_bars = eq_bars
+
         def animate_eq():
             if not self.sidebar.winfo_exists() or not self.eq_canvas.winfo_exists():
                 return
-            
-            # Verificar si sonido está activo leyendo config_manager
+
             sound_active = self.config_manager.config.get("sound_effects", True)
-            
+
             if self.is_sidebar_collapsed:
                 self.eq_canvas.pack_forget()
                 self.eq_label.configure(text="🔇" if not sound_active else "🔊", font=("Arial", 14, "bold"))
+                return
             else:
                 self.eq_canvas.pack(fill="x", pady=2)
                 self.eq_label.configure(
                     text="⚡ HAPTIC SYSTEM: ACTIVE" if sound_active else "⚠️ HAPTIC SYSTEM: MUTED",
                     font=("Arial", 8, "bold")
                 )
-                
+
                 self.eq_canvas.delete("all")
                 w = self.eq_canvas.winfo_width()
                 if w <= 1: w = 220
                 num_bars = len(eq_bars)
                 bar_w = int((w - (num_bars * 3)) / num_bars)
-                
+
                 for idx in range(num_bars):
                     h = random.randint(4, 25) if sound_active else 2
                     x1 = idx * (bar_w + 3) + 5
@@ -1566,19 +2031,37 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                     x2 = x1 + bar_w
                     y2 = 30
                     self.eq_canvas.create_rectangle(x1, y1, x2, y2, fill=self.colors["accent"], outline="")
-                    
-            self.after(150, animate_eq)
-            
-        animate_eq()
-        
-        # Content frame
+
+        self.register_animation("equalizer", animate_eq, interval_ms=150)
+
+        # Content area: CTkFrame packed to fill full remaining width
         self.content_frame = ctk.CTkFrame(main_panel, fg_color=self.colors["bg"])
         self.content_frame.pack(side="left", fill="both", expand=True)
-        
+        self.content_frame.pack_propagate(False)
+
+        # Wallpaper canvas (unpacked, used only for canvas item rendering if needed)
+        import tkinter as tk
+        self._content_canvas = tk.Canvas(main_panel, highlightthickness=0, borderwidth=0,
+                                         bg=self.colors["bg"])
+
         # Mostrar Dashboard por defecto
+        self.start_main_loop(fps=24)
+        self.update_idletasks()
         self.show_dashboard()
         if self.menu_buttons:
             self.menu_buttons[0].set_active(True)
+        self.notify("Sistema listo", "Aplicación iniciada correctamente",
+                     category="system", priority="low", source="system")
+        if self.wallpaper._wallpaper_pil:
+            self.after(100, self._render_wallpaper)
+        else:
+            logger.info("No wallpaper loaded, checking config path...")
+            wp_cfg = self.config_manager.get_wallpaper_config()
+            if wp_cfg.get("path"):
+                loaded = self.wallpaper.load_wallpaper(wp_cfg["path"])
+                if loaded:
+                    self.after(200, self._render_wallpaper)
+        self.after(500, self._apply_acrylic_effect)
     
     def _add_section_separator(self, text):
         sep = ctk.CTkFrame(self.sidebar_scroll, fg_color=self.colors["border"], height=1)
@@ -1606,37 +2089,43 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
             self.after(1000, self.update_clock)
     
     def clear_content(self):
+        anim_keys = [k for k in self._animations if k.startswith("radar_") or k == "dashboard_resources"]
+        for k in anim_keys:
+            self.unregister_animation(k)
         for widget in self.content_frame.winfo_children():
             if hasattr(widget, 'is_tool_container'):
                 widget.auto_back = False
             widget.destroy()
-            
-        # Animación de slide-in suave para todo el contenido usando interpolación de pack padding
+
+        # Slide-in animation: brief slide from right using pack padding
         def slide_in(step=0):
             if not self.content_frame.winfo_exists():
                 return
             if step <= 15:
                 t = step / 15
-                # Easing cúbico out
                 ease = 1 - (1 - t) ** 3
-                current_pad = int(45 * (1 - ease))
-                self.content_frame.pack_configure(padx=(current_pad, 0))
+                offset = int(45 * (1 - ease))
+                self.content_frame.pack_configure(padx=(offset, 0))
                 self.after(8, lambda: slide_in(step + 1))
             else:
                 self.content_frame.pack_configure(padx=(0, 0))
-                
+
         slide_in()
     
     # ============ DASHBOARD ============
     # ============ DASHBOARD ============
     def show_dashboard(self):
+        if not hasattr(self, 'content_frame') or not self.content_frame.winfo_exists():
+            self.toast.show("Error: Interfaz no inicializada. Reinicia la app.", type="error", duration=5)
+            return
+        self.update_idletasks()
         self.clear_content()
         self.set_active_menu(self.menu_buttons[0])
         self.current_menu = self.show_dashboard
         
         # Grid layout con CTkScrollableFrame para permitir múltiples radares en scroll
-        dashboard_frame = ctk.CTkScrollableFrame(self.content_frame, fg_color="transparent")
-        dashboard_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        dashboard_frame = ctk.CTkScrollableFrame(self.content_frame, fg_color=self.colors["bg"])
+        dashboard_frame.pack(fill="both", expand=True)
         
         dashboard_grid = ctk.CTkFrame(dashboard_frame, fg_color="transparent")
         dashboard_grid.pack(fill="both", expand=True)
@@ -1675,9 +2164,120 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                 
         threading.Thread(target=fetch_ai_tip, daemon=True).start()
         
+        # 2.b Quick Access — learning shortcuts
+        learn_card = ctk.CTkFrame(left_col, fg_color=self.colors["fg"], corner_radius=15)
+        learn_card.pack(fill="x", pady=(0, 15))
+        ctk.CTkLabel(learn_card, text="Acceso Rápido",
+                     font=("Arial", 14, "bold"), text_color=self.colors["text"]).pack(anchor="w", padx=20, pady=(10, 5))
+        learn_grid = ctk.CTkFrame(learn_card, fg_color="transparent")
+        learn_grid.pack(fill="x", padx=15, pady=(0, 10))
+
+        learn_topics = [
+            ("Hacking Ético", "hacking", "Pentesting, nmap, payloads"),
+            ("OSINT", "osint", "Reconocimiento, subdominios"),
+            ("Criptografía", "crypto", "Cifrados, hashes"),
+            ("Redes", "network", "DNS, ping, GeoIP"),
+        ]
+        for topic_name, mod_name, topic_desc in learn_topics:
+            row = ctk.CTkFrame(learn_grid, fg_color=self.colors["bg"], corner_radius=8)
+            row.pack(fill="x", pady=3)
+            row.columnconfigure(1, weight=1)
+            ctk.CTkLabel(row, text=topic_name, font=("Arial", 11, "bold"),
+                         text_color=self.colors["text"]).grid(row=0, column=0, sticky="w", padx=10, pady=(6, 0))
+            ctk.CTkLabel(row, text=topic_desc, font=("Arial", 9),
+                         text_color=self.colors["text_secondary"]).grid(row=1, column=0, sticky="w", padx=10, pady=(0, 6))
+            ctk.CTkButton(row, text="▶", width=32, height=28,
+                         fg_color=self.colors["accent"], hover_color=self.colors["hover"],
+                         command=lambda m=mod_name: self.activate_module(self.modules[m])
+                         if m in self.modules else None).grid(row=0, column=1, rowspan=2, padx=10, sticky="e")
+
+        # ── Status de Adaptación ────────────────────────────
+        adapt_card = ctk.CTkFrame(left_col, fg_color=self.colors["fg"], corner_radius=15)
+        adapt_card.pack(fill="x", pady=(0, 15))
+        ctk.CTkLabel(adapt_card, text="Estado del Sistema",
+                     font=("Arial", 14, "bold"), text_color=self.colors["text"]).pack(anchor="w", padx=20, pady=(10, 5))
+
+        adapt_inner = ctk.CTkFrame(adapt_card, fg_color="transparent")
+        adapt_inner.pack(fill="x", padx=15, pady=(0, 10))
+
+        if hasattr(self, "adaptation"):
+            ae = self.adaptation
+            report = ae.full_report()
+
+            # Tier badge
+            tier = report["performance_tier"]
+            tier_colors = {"low": "#8a3a3a", "medium": "#8a6a2a", "high": "#2a6a3a", "ultra": "#2a5a8a"}
+            tier_labels = {"low": "Bajo", "medium": "Medio", "high": "Alto", "ultra": "Ultra"}
+            tier_frame = ctk.CTkFrame(adapt_inner, fg_color="transparent")
+            tier_frame.pack(fill="x")
+            ctk.CTkLabel(tier_frame, text="Rendimiento:", text_color=self.colors["text_secondary"]).pack(side="left")
+            ctk.CTkLabel(tier_frame, text=tier_labels.get(tier, tier),
+                        fg_color=tier_colors.get(tier, "#555"), text_color="white",
+                        corner_radius=4, font=("Arial", 10, "bold"), width=60).pack(side="left", padx=6)
+
+            # Resource bars
+            ram_pct = psutil.virtual_memory().percent
+            cpu_pct = psutil.cpu_percent()
+            def bar(parent, label, pct, color):
+                bf = ctk.CTkFrame(parent, fg_color="transparent")
+                bf.pack(fill="x", pady=1)
+                ctk.CTkLabel(bf, text=label, width=40, font=("Arial", 9),
+                            text_color=self.colors["text_secondary"]).pack(side="left")
+                pb = ctk.CTkProgressBar(bf, height=10, corner_radius=3,
+                                        progress_color=color, fg_color=self.colors["bg"])
+                pb.pack(side="left", fill="x", expand=True, padx=4)
+                pb.set(pct / 100.0)
+                ctk.CTkLabel(bf, text=f"{pct:.0f}%", width=36, font=("Arial", 9),
+                            text_color=self.colors["text_secondary"]).pack(side="left")
+
+            bar(adapt_inner, "RAM", ram_pct, self.colors["accent_light"])
+            bar(adapt_inner, "CPU", cpu_pct, self.colors["accent"])
+
+            # Network status
+            net = report["network"]
+            net_frame = ctk.CTkFrame(adapt_inner, fg_color="transparent")
+            net_frame.pack(fill="x", pady=(4, 0))
+            net_text = "Conectado" if net.get("internet") else "Sin internet"
+            net_color = self.colors["success"] if net.get("internet") else self.colors["error"]
+            ctk.CTkLabel(net_frame, text="Red:", text_color=self.colors["text_secondary"],
+                        font=("Arial", 9)).pack(side="left")
+            ctk.CTkLabel(net_frame, text=net_text, text_color=net_color,
+                        font=("Arial", 9, "bold")).pack(side="left", padx=4)
+            if net.get("latency_ms"):
+                ctk.CTkLabel(net_frame, text=f"{net['latency_ms']}ms",
+                            text_color=self.colors["text_secondary"], font=("Arial", 9)).pack(side="left")
+
+            # Top modules
+            top = report["user"]["top_modules"]
+            if top:
+                mod_frame = ctk.CTkFrame(adapt_inner, fg_color="transparent")
+                mod_frame.pack(fill="x", pady=(4, 0))
+                ctk.CTkLabel(mod_frame, text="Frecuentes:", text_color=self.colors["text_secondary"],
+                            font=("Arial", 9)).pack(side="left")
+                ctk.CTkLabel(mod_frame, text=", ".join(top), font=("Arial", 9, "italic"),
+                            text_color=self.colors["accent_light"]).pack(side="left", padx=4)
+        else:
+            ctk.CTkLabel(adapt_inner, text="Motor de adaptación no disponible",
+                        text_color=self.colors["text_secondary"]).pack()
+
         # Telemetría de Red Real activa para el Radar 1
         active_points = []
-        
+        _seen_alerts = set()
+
+        def _notify_alert(alert_text, priority="high"):
+            h = hashlib.md5(alert_text.encode()).hexdigest()[:8]
+            if h in _seen_alerts:
+                return
+            _seen_alerts.add(h)
+            title = "Alerta de seguridad"
+            if "inseguro" in alert_text or "FTP" in alert_text:
+                title = "Puerto inseguro detectado"
+            elif "HTTP" in alert_text:
+                title = "HTTP sin cifrar"
+            elif "Crítico" in alert_text:
+                title = "Conexión crítica detectada"
+            self.notify(title, alert_text, category="security", priority=priority, source="radar")
+
         def scan_real_network():
             nonlocal active_points
             new_points = []
@@ -1691,11 +2291,15 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                     if conn.status == 'LISTEN':
                         lport = conn.laddr.port
                         if lport in [21, 23]:
-                            alerts.append(f"[ALERTA] Puerto inseguro {lport} (FTP/Telnet) en LISTEN.")
+                            a = f"Puerto inseguro {lport} (FTP/Telnet) en LISTEN."
+                            alerts.append(f"[ALERTA] {a}")
                             score -= 10
+                            _notify_alert(a)
                         elif lport in [80]:
-                            alerts.append(f"[ALERTA] Puerto HTTP {lport} abierto (sin cifrado).")
+                            a = f"Puerto HTTP {lport} abierto (sin cifrado)."
+                            alerts.append(f"[ALERTA] {a}")
                             score -= 5
+                            _notify_alert(a, "normal")
                             
                     elif conn.status == 'ESTABLISHED' and conn.raddr:
                         rip = conn.raddr.ip
@@ -1709,6 +2313,8 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                                 score -= 3
                             else:
                                 lvl = "Crítico"
+                                a = f"Conexión establecida con {rip}:{rport} (no clasificado)"
+                                _notify_alert(a)
                                 score -= 5
                                 
                             ip_hash = sum(map(int, [x for x in rip.split('.') if x.isdigit()]))
@@ -1736,9 +2342,8 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
             canvas = ctk.CTkCanvas(card, width=320, height=280, bg=self.colors["fg"], highlightthickness=0)
             canvas.pack(pady=5)
             rendered = []
-            angle = 0
+            angle = [0]
             def animate():
-                nonlocal angle, rendered
                 if not canvas.winfo_exists():
                     return
                 canvas.delete("all")
@@ -1748,32 +2353,25 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                 canvas.create_line(cx-R, cy, cx+R, cy, fill=self.colors["border"], width=1)
                 canvas.create_line(cx, cy-R, cx, cy+R, fill=self.colors["border"], width=1)
                 pts = points_fetcher()
-                new_rendered = []
                 for item in pts:
                     rad_angle, distance, severity, name, extra = item
                     rad = math.radians(rad_angle)
                     px = cx + distance * math.cos(rad)
                     py = cy - distance * math.sin(rad)
                     color = self.colors["success"] if severity == "Bajo" else (self.colors["warning"] if severity == "Medio" else self.colors["error"])
-                    new_rendered.append({"x": px, "y": py, "lvl": severity, "name": name, "extra": extra, "color": color})
-                    # Punto con glow
                     for g in range(3, 0, -1):
                         canvas.create_oval(px-g*3, py-g*3, px+g*3, py+g*3,
                                           outline="", fill=color if g == 1 else self.colors["bg"],
                                           stipple="gray25" if g > 1 else "")
                     canvas.create_oval(px-4, py-4, px+4, py+4, fill=color, outline="")
-                rendered = new_rendered
-                rad_sweep = math.radians(angle)
+                rad_sweep = math.radians(angle[0])
                 lx = cx + R * math.cos(rad_sweep)
                 ly = cy - R * math.sin(rad_sweep)
-                # Haz con degradado
                 for i in range(3):
-                    off = i * 2
                     canvas.create_line(cx, cy, lx, ly, fill=self.colors["accent"],
                                       width=3-i, stipple="gray50" if i > 0 else "")
-                angle = (angle + 2) % 360
-                self.after(40, animate)
-            animate()
+                angle[0] = (angle[0] + 2) % 360
+            self.register_animation(f"radar_soc_{id(card)}", animate, interval_ms=40)
             return card
 
         # RADAR 2 (LAN): Hex-grid con puntos cuadrados
@@ -1784,15 +2382,13 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                         text_color=self.colors["accent_light"]).pack(anchor="w", padx=20, pady=10)
             canvas = ctk.CTkCanvas(card, width=320, height=280, bg=self.colors["fg"], highlightthickness=0)
             canvas.pack(pady=5)
-            rendered = []
-            pulse = 0
+            pulse = [0]
             def animate():
-                nonlocal pulse, rendered
                 if not canvas.winfo_exists():
+                    self.unregister_animation(f"radar_lan_{id(card)}")
                     return
                 canvas.delete("all")
                 cx, cy, R = 160, 140, 120
-                # Hexágonos concéntricos
                 for ring in [1, 2, 3]:
                     r = ring * 35
                     pts_hex = []
@@ -1803,32 +2399,25 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                         x1, y1 = pts_hex[i]
                         x2, y2 = pts_hex[(i+1) % 6]
                         canvas.create_line(x1, y1, x2, y2, fill=self.colors["border"], width=1, dash=(2,4))
-                # Líneas radiales del hexágono
                 for i in range(6):
                     a = math.radians(60 * i - 30)
                     canvas.create_line(cx, cy, cx + R * math.cos(a), cy + R * math.sin(a),
                                       fill=self.colors["border"], width=1, dash=(2,4))
                 pts = points_fetcher()
-                new_rendered = []
-                pulse = (pulse + 1) % 30
+                pulse[0] = (pulse[0] + 1) % 30
                 for item in pts:
                     rad_angle, distance, severity, name, extra = item
                     rad = math.radians(rad_angle)
                     px = cx + distance * math.cos(rad)
                     py = cy - distance * math.sin(rad)
                     color = self.colors["success"] if severity == "Bajo" else (self.colors["warning"] if severity == "Medio" else self.colors["error"])
-                    new_rendered.append({"x": px, "y": py, "name": name, "extra": extra, "lvl": severity, "color": color})
-                    # Heat pulse
-                    heat_r = 6 + abs(pulse - 20) * 0.5
+                    heat_r = 6 + abs(pulse[0] - 20) * 0.5
                     canvas.create_oval(px-heat_r, py-heat_r, px+heat_r, py+heat_r,
                                       fill="", outline=color, width=2)
                     canvas.create_oval(px-4, py-4, px+4, py+4, fill=color, outline="")
-                    # Etiqueta
                     canvas.create_text(px, py-14, text=name, fill=color,
                                       font=("Arial", 7, "bold"))
-                rendered = new_rendered
-                self.after(60, animate)
-            animate()
+            self.register_animation(f"radar_lan_{id(card)}", animate, interval_ms=60)
             return card
 
         # RADAR 3 (Threat): Estilo topográfico/heatmap con puntos pulsantes
@@ -1839,20 +2428,17 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                         text_color=self.colors["error"]).pack(anchor="w", padx=20, pady=10)
             canvas = ctk.CTkCanvas(card, width=320, height=280, bg=self.colors["fg"], highlightthickness=0)
             canvas.pack(pady=5)
-            rendered = []
-            pulse = 0
+            pulse = [0]
             def animate():
-                nonlocal pulse, rendered
                 if not canvas.winfo_exists():
+                    self.unregister_animation(f"radar_threat_{id(card)}")
                     return
                 canvas.delete("all")
                 cx, cy, R = 160, 140, 130
-                # Curvas topográficas
                 for r in [25, 50, 75, 100, 125]:
                     canvas.create_oval(cx-r, cy-r, cx+r, cy+r,
                                       outline=self.colors["border"], width=1,
                                       dash=(1, 6) if r % 2 == 0 else (3, 4))
-                # Líneas de latitud/longitud (globe style)
                 for a_deg in range(0, 360, 30):
                     a = math.radians(a_deg)
                     x = cx + R * math.cos(a)
@@ -1863,26 +2449,20 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                     canvas.create_oval(cx-R, yy-R*0.15, cx+R, yy+R*0.15,
                                       outline=self.colors["border"], width=1, dash=(2, 6))
                 pts = points_fetcher()
-                new_rendered = []
-                pulse = (pulse + 1) % 40
+                pulse[0] = (pulse[0] + 1) % 40
                 for item in pts:
                     rad_angle, distance, severity, name, extra = item
                     rad = math.radians(rad_angle)
                     px = cx + distance * math.cos(rad)
                     py = cy - distance * math.sin(rad) * 0.5
                     color = self.colors["error"] if severity == "Crítico" else (self.colors["warning"] if severity == "Medio" else self.colors["success"])
-                    new_rendered.append({"x": px, "y": py, "name": name, "extra": extra, "lvl": severity, "color": color})
-                    # Heat pulse
-                    heat_r = 6 + abs(pulse - 20) * 0.5
+                    heat_r = 6 + abs(pulse[0] - 20) * 0.5
                     canvas.create_oval(px-heat_r, py-heat_r, px+heat_r, py+heat_r,
                                       fill="", outline=color, width=2)
                     canvas.create_oval(px-4, py-4, px+4, py+4, fill=color, outline="")
-                    # Etiqueta
                     canvas.create_text(px, py-14, text=name, fill=color,
                                       font=("Arial", 7, "bold"))
-                rendered = new_rendered
-                self.after(50, animate)
-            animate()
+            self.register_animation(f"radar_threat_{id(card)}", animate, interval_ms=50)
             return card
 
         # Crear los 3 radares
@@ -1990,76 +2570,90 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
         ram_canvas = ctk.CTkCanvas(ram_col, width=60, height=50, bg=self.colors["bg"], highlightthickness=0)
         ram_canvas.pack(pady=5)
         
-        wave_offset = 0
+        wave_offset = [0]
+        _last_cpu_check = [0]
+        _last_ram_check = [0]
+        _cached_cpu = [25.0]
+        _cached_ram = [50.0]
+        _last_network_scan = [0]
+        _cached_score = [100]
+        _last_notif_refresh = [0]
+
         def update_dashboard_resources():
-            nonlocal wave_offset
             if not (cpu_canvas.winfo_exists() and ram_canvas.winfo_exists()):
                 return
-                
-            # Escanear red real y actualizar Score & Alertas
-            score, alerts = scan_real_network()
             
-            # Modificar interfaz con el score real obtenido
+            import time as _time
+            now = _time.time()
+
+            # Throttle network scan to every 2 seconds
+            if now - _last_network_scan[0] > 2.0:
+                _cached_score[0], alerts = scan_real_network()
+                _last_network_scan[0] = now
+                if alerts and log_box.winfo_exists():
+                    log_box.configure(state="normal")
+                    for alert in alerts:
+                        content = log_box.get("1.0", "end")
+                        if alert not in content:
+                            log_box.insert("1.0", f"{datetime.datetime.now().strftime('%H:%M:%S')} - {alert}\n")
+                    log_box.configure(state="disabled")
+            score = _cached_score[0]
+
             status_text_label.configure(text=f"{score}%")
             status_desc_label.configure(
                 text="SEGURO" if score > 85 else ("ALERTA" if score > 65 else "RIESGO"),
                 text_color=self.colors["success"] if score > 85 else (self.colors["warning"] if score > 65 else self.colors["error"])
             )
-            
-            # Reportar alertas de seguridad al Log Feed en caliente
-            if alerts and log_box.winfo_exists():
-                log_box.configure(state="normal")
-                for alert in alerts:
-                    content = log_box.get("1.0", "end")
-                    if alert not in content:
-                        log_box.insert("1.0", f"{datetime.datetime.now().strftime('%H:%M:%S')} - {alert}\n")
-                log_box.configure(state="disabled")
-                
-            # CPU Oscilloscope Wave
+
+            # Throttle CPU check to every 1 second
+            if now - _last_cpu_check[0] > 1.0:
+                try:
+                    _cached_cpu[0] = psutil.cpu_percent()
+                except:
+                    _cached_cpu[0] = 25
+                _last_cpu_check[0] = now
+            cpu_p = _cached_cpu[0]
+
             cpu_canvas.delete("all")
-            try:
-                cpu_p = psutil.cpu_percent()
-            except:
-                cpu_p = 25
-            
             amplitude = 5 + (cpu_p * 0.15)
             frequency = 0.15
-            points = []
-            for x in range(0, 130, 2):
-                y = 25 + amplitude * math.sin((x + wave_offset) * frequency)
-                points.append((x, y))
-            
-            # Cuadrícula
             for grid_x in range(0, 130, 20):
                 cpu_canvas.create_line(grid_x, 0, grid_x, 50, fill=self.colors["border"], width=1)
             for grid_y in range(0, 50, 15):
                 cpu_canvas.create_line(0, grid_y, 130, grid_y, fill=self.colors["border"], width=1)
-                
-            # Línea senoidal
-            for idx in range(len(points) - 1):
-                x1, y1 = points[idx]
-                x2, y2 = points[idx+1]
-                cpu_canvas.create_line(x1, y1, x2, y2, fill=self.colors["accent"], width=2)
-                
+            for x in range(0, 128, 2):
+                y1 = 25 + amplitude * math.sin((x + wave_offset[0]) * frequency)
+                y2 = 25 + amplitude * math.sin((x + 2 + wave_offset[0]) * frequency)
+                cpu_canvas.create_line(x, y1, x+2, y2, fill=self.colors["accent"], width=2)
             cpu_canvas.create_text(65, 40, text=f"CPU: {cpu_p:.1f}%", fill=self.colors["text"], font=("Arial", 8, "bold"))
-            
-            # RAM Load Dial
+
+            if now - _last_ram_check[0] > 1.0:
+                try:
+                    _cached_ram[0] = psutil.virtual_memory().percent
+                except:
+                    _cached_ram[0] = 50
+                _last_ram_check[0] = now
+            ram_p = _cached_ram[0]
+
             ram_canvas.delete("all")
-            try:
-                ram_p = psutil.virtual_memory().percent
-            except:
-                ram_p = 50
-                
             ram_canvas.create_oval(15, 5, 45, 35, outline=self.colors["border"], width=3)
             extent_angle = -(ram_p / 100.0) * 359
             ram_canvas.create_arc(15, 5, 45, 35, start=90, extent=extent_angle, outline=self.colors["accent_light"], width=3, style="arc")
             ram_canvas.create_text(30, 20, text=f"{int(ram_p)}%", fill=self.colors["text"], font=("Arial", 9, "bold"))
             ram_canvas.create_text(30, 42, text="RAM USED", fill=self.colors["text_secondary"], font=("Arial", 7, "bold"))
-            
-            wave_offset += 3
-            self.after(100, update_dashboard_resources)
-            
-        update_dashboard_resources()
+
+            wave_offset[0] += 3
+
+            # Refresh notification badge periodically
+            if now - _last_notif_refresh[0] > 5.0:
+                _last_notif_refresh[0] = now
+                self._update_notif_badge()
+                if self._notif_sidebar_btn and self._notif_sidebar_btn.winfo_exists():
+                    uc = self.notifications.get_unread_count()
+                    self._notif_sidebar_btn.configure(
+                        text=f"Notificaciones ({uc})" if uc > 0 else "Notificaciones")
+
+        self.register_animation("dashboard_resources", update_dashboard_resources, interval_ms=100)
         
         # ── NOTICIAS GLOBALES DE CIBERSEGURIDAD (con imágenes) ──────────
         news_card = ctk.CTkFrame(right_col, fg_color=self.colors["fg"], corner_radius=15)
@@ -2395,6 +2989,21 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
         
         threading.Thread(target=load_colombia_news, daemon=True).start()
         
+        # ── NOTIFICACIONES RECIENTES ─────────────────────────────────
+        notif_card = ctk.CTkFrame(right_col, fg_color=self.colors["fg"], corner_radius=15)
+        notif_card.pack(fill="x", pady=(0, 12))
+        notif_hdr = ctk.CTkFrame(notif_card, fg_color="transparent")
+        notif_hdr.pack(fill="x", padx=15, pady=(10, 4))
+        ctk.CTkLabel(notif_hdr, text="Actividad Reciente",
+                     font=("Arial", 13, "bold"), text_color=self.colors["text"]).pack(side="left")
+        ctk.CTkButton(notif_hdr, text="Ver todo", command=self._toggle_notif_panel,
+                      fg_color="transparent", hover_color=self.colors["hover"],
+                      text_color=self.colors["accent"], width=70, height=24,
+                      font=("Arial", 9)).pack(side="right")
+        notif_scroll = ctk.CTkScrollableFrame(notif_card, fg_color="transparent", height=140)
+        notif_scroll.pack(fill="x", padx=10, pady=(0, 8))
+        self._load_notif_feed(notif_scroll)
+
         # ── NOTAS RÁPIDAS ────────────────────────────────────────────
         try:
             from modules.notas_module import NotesModule
@@ -2778,6 +3387,311 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
             self.config_manager.save_config()
             ctk.set_appearance_mode(mode)
             self.toast.show(f"Modo {mode}", type="success")
+
+        # ========== RENDIMIENTO Y ADAPTACIÓN ==========
+        sec_perf = seccion(scroll, "⚡ Rendimiento y Adaptación")
+
+        # Tier selector
+        tier_frame = ctk.CTkFrame(sec_perf, fg_color="transparent")
+        tier_frame.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(tier_frame, text="Perfil de rendimiento:", text_color=self.colors["text_secondary"]).pack(side="left")
+        current_tier = self.config_manager.config.get("performance_tier", "auto")
+        tier_var = ctk.StringVar(value=current_tier)
+        for t_val, t_label in [("auto", "Auto"), ("low", "Bajo"), ("medium", "Medio"), ("high", "Alto"), ("ultra", "Ultra")]:
+            ctk.CTkRadioButton(tier_frame, text=t_label, variable=tier_var, value=t_val,
+                              fg_color=self.colors["accent"], text_color=self.colors["text"],
+                              command=lambda v=t_val: set_tier(v)).pack(side="left", padx=4)
+
+        def set_tier(val):
+            self.config_manager.config["performance_tier"] = val
+            self.config_manager.save_config()
+            if hasattr(self, "adaptation"):
+                self.adaptation.set_tier(val)
+            self.toast.show(f"Perfil: {val}", type="success")
+
+        # Scan profile preference
+        scan_frame = ctk.CTkFrame(sec_perf, fg_color="transparent")
+        scan_frame.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(scan_frame, text="Escaneo preferido:", text_color=self.colors["text_secondary"]).pack(side="left")
+        pref_scan = self.config_manager.config.get("preferred_scan_profile", "normal")
+        scan_var = ctk.StringVar(value=pref_scan)
+        for s_val, s_label in [("quick", "Rápido"), ("normal", "Normal"), ("deep", "Profundo")]:
+            ctk.CTkRadioButton(scan_frame, text=s_label, variable=scan_var, value=s_val,
+                              fg_color=self.colors["accent"], text_color=self.colors["text"],
+                              command=lambda v=s_val: set_scan_pref(v)).pack(side="left", padx=4)
+
+        scan_labels = {"quick": "Rápido", "normal": "Normal", "deep": "Profundo"}
+        def set_scan_pref(val):
+            self.config_manager.config["preferred_scan_profile"] = val
+            self.config_manager.save_config()
+            if hasattr(self, "adaptation"):
+                self.adaptation.user.preferred_scan_profile = val
+                self.adaptation.save_profile()
+            self.toast.show(f"Perfil de escaneo: {scan_labels.get(val, val)}", type="success")
+
+        # System info + recommendations
+        info_frame = ctk.CTkFrame(sec_perf, fg_color=self.colors["bg"], corner_radius=8)
+        info_frame.pack(fill="x", padx=15, pady=8)
+        if hasattr(self, "adaptation"):
+            report = self.adaptation.full_report()
+            lines = [
+                f"Tier detectado: {self.adaptation.current_tier_label()}",
+                f"CPU: {report['system']['cpu_cores']} núcleos  |  RAM: {report['system']['ram_gb']} GB",
+                f"Internet: {'Sí' if report['network']['internet'] else 'No'}  |  Latencia: {report['network']['latency_ms'] or 'N/A'}ms",
+                f"Sesiones: {report['user']['sessions']}  |  Tiempo total: {report['user']['total_time_hours']}h",
+            ]
+            for line in lines:
+                ctk.CTkLabel(info_frame, text=line, font=("Arial", 10),
+                            text_color=self.colors["text_secondary"],
+                            anchor="w", justify="left").pack(anchor="w", padx=10, pady=1)
+
+            # Top modules from user profile
+            top = report["user"]["top_modules"]
+            if top:
+                mods_frame = ctk.CTkFrame(sec_perf, fg_color="transparent")
+                mods_frame.pack(fill="x", padx=15, pady=2)
+                ctk.CTkLabel(mods_frame, text="Módulos más usados:", text_color=self.colors["text_secondary"]).pack(side="left")
+                ctk.CTkLabel(mods_frame, text=", ".join(top), font=("Arial", 9),
+                            text_color=self.colors["accent_light"]).pack(side="left", padx=8)
+
+            # Recommendations
+            recs = report["recommendations"]
+            if recs:
+                rec_frame = ctk.CTkFrame(sec_perf, fg_color="transparent")
+                rec_frame.pack(fill="x", padx=15, pady=5)
+                ctk.CTkLabel(rec_frame, text="Recomendaciones:", font=("Arial", 10, "bold"),
+                            text_color=self.colors["warning"]).pack(anchor="w")
+                for r in recs:
+                    ctk.CTkLabel(rec_frame, text=f"• {r['reason']} → {r['setting']}: {r['value']}",
+                                font=("Arial", 9), text_color=self.colors["text_secondary"],
+                                anchor="w", justify="left").pack(anchor="w", padx=10)
+
+            # Full report button
+            def show_full_report():
+                r = self.adaptation.full_report()
+                rwin = ctk.CTkToplevel(self)
+                rwin.title("Reporte completo de adaptación")
+                rwin.geometry("500x400")
+                txt = ctk.CTkTextbox(rwin, wrap="word", font=("Consolas", 10))
+                txt.pack(fill="both", expand=True, padx=10, pady=10)
+                import json
+                txt.insert("1.0", json.dumps(r, indent=2, ensure_ascii=False, default=str))
+                txt.configure(state="disabled")
+
+            ctk.CTkButton(sec_perf, text="📊 Ver reporte completo", command=show_full_report,
+                         fg_color=self.colors["accent"], width=180, height=28).pack(pady=8)
+        else:
+            ctk.CTkLabel(info_frame, text="Motor de adaptación no disponible",
+                        font=("Arial", 10), text_color=self.colors["text_secondary"]).pack(pady=10)
+
+        # ========== WALLPAPER Y EFECTOS ==========
+        sec_wallpaper = seccion(scroll, "🎨 Wallpaper y Efectos")
+
+        wp_config = self.config_manager.get_wallpaper_config()
+        wallpaper_status = ctk.CTkLabel(sec_wallpaper, text="Fondo de pantalla:", text_color=self.colors["text_secondary"])
+        wallpaper_status.pack(anchor="w", padx=15, pady=(5, 2))
+        wp_path_label = ctk.CTkLabel(sec_wallpaper, text=wp_config.get("path", "Ninguno") or "Ninguno",
+                                     font=("Arial", 10), text_color=self.colors["text"], wraplength=400, justify="left")
+        wp_path_label.pack(anchor="w", padx=15)
+
+        def pick_wallpaper():
+            fp = filedialog.askopenfilename(title="Seleccionar fondo de pantalla",
+                                            filetypes=[("Imágenes", "*.png;*.jpg;*.jpeg;*.bmp;*.webp")])
+            if fp:
+                self.config_manager.set_wallpaper_path(fp)
+                self.wallpaper.config = self.config_manager.get_wallpaper_config()
+                self.wallpaper.load_wallpaper(fp)
+                wp_path_label.configure(text=fp)
+                if self.config_manager.config.get("wallpaper", {}).get("auto_theme"):
+                    self._apply_wallpaper_theme()
+                self.after(500, self._render_wallpaper)
+                self.toast.show("Fondo de pantalla actualizado", type="success")
+
+        wp_btn_frame = ctk.CTkFrame(sec_wallpaper, fg_color="transparent")
+        wp_btn_frame.pack(fill="x", padx=15, pady=5)
+        ctk.CTkButton(wp_btn_frame, text="📁 Seleccionar imagen", command=pick_wallpaper,
+                      fg_color=self.colors["accent"], width=160, height=28).pack(side="left", padx=(0, 5))
+
+        def clear_wallpaper():
+            self.config_manager.set_wallpaper_path("")
+            self.config_manager.set_wallpaper_config("path", "")
+            self.wallpaper.config["path"] = ""
+            self.wallpaper._wallpaper_pil = None
+            self.wallpaper._colors = None
+            wp_path_label.configure(text="Ninguno")
+            self._wallpaper_loaded = False
+            if self._wallpaper_label:
+                try:
+                    self._wallpaper_label.destroy()
+                except Exception:
+                    pass
+                self._wallpaper_label = None
+            if hasattr(self, '_content_canvas') and self._content_canvas.winfo_exists():
+                self._content_canvas.delete("wp_bg")
+                self._content_canvas.configure(bg=self.colors["bg"])
+            self.toast.show("Fondo eliminado", type="info")
+
+        ctk.CTkButton(wp_btn_frame, text="🗑 Quitar", command=clear_wallpaper,
+                      fg_color="transparent", hover_color=self.colors["hover"],
+                      text_color=self.colors["text_secondary"], width=80, height=28).pack(side="left")
+
+        # Modo de ajuste
+        mode_frame = ctk.CTkFrame(sec_wallpaper, fg_color="transparent")
+        mode_frame.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(mode_frame, text="Ajuste:", text_color=self.colors["text_secondary"]).pack(side="left")
+        mode_var = ctk.StringVar(value=wp_config.get("mode", "cover"))
+        def _on_wp_mode_change():
+            self.config_manager.set_wallpaper_config("mode", mode_var.get())
+            self.wallpaper.config["mode"] = mode_var.get()
+            self.after(300, self._render_wallpaper)
+        for mode_val, mode_label in [("cover", "Cubrir"), ("contain", "Contener"), ("stretch", "Estirar")]:
+            ctk.CTkRadioButton(mode_frame, text=mode_label, variable=mode_var, value=mode_val,
+                              fg_color=self.colors["accent"], text_color=self.colors["text"],
+                              command=_on_wp_mode_change).pack(side="left", padx=4)
+
+        # Opacidad del wallpaper
+        opacity_frame = ctk.CTkFrame(sec_wallpaper, fg_color="transparent")
+        opacity_frame.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(opacity_frame, text="Opacidad:", text_color=self.colors["text_secondary"]).pack(side="left")
+        wp_opacity_val = ctk.CTkLabel(opacity_frame, text=f"{wp_config.get('opacity', 0.3):.0%}",
+                                      text_color=self.colors["text"], width=40)
+        wp_opacity_val.pack(side="left")
+        def on_wp_opacity(v):
+            wp_opacity_val.configure(text=f"{float(v):.0%}")
+            self.config_manager.set_wallpaper_config("opacity", float(v))
+            self.wallpaper.config["opacity"] = float(v)
+        wp_opacity_slider = ctk.CTkSlider(opacity_frame, from_=0.03, to=1.0, number_of_steps=30,
+                                          progress_color=self.colors["accent"],
+                                          command=on_wp_opacity)
+        wp_opacity_slider.pack(side="left", fill="x", expand=True, padx=8)
+        wp_opacity_slider.set(wp_config.get("opacity", 0.3))
+
+        # Blur del wallpaper
+        blur_frame = ctk.CTkFrame(sec_wallpaper, fg_color="transparent")
+        blur_frame.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(blur_frame, text="Blur:", text_color=self.colors["text_secondary"]).pack(side="left")
+        blur_slider = ctk.CTkSlider(blur_frame, from_=0, to=50, number_of_steps=25,
+                                     progress_color=self.colors["accent"])
+        blur_slider.pack(side="left", fill="x", expand=True, padx=8)
+        blur_slider.set(wp_config.get("blur_radius", 0))
+        blur_val = ctk.CTkLabel(blur_frame, text=f"{wp_config.get('blur_radius', 0):.0f}px",
+                                text_color=self.colors["text"], width=40)
+        blur_val.pack(side="left")
+        def on_wp_blur(v):
+            blur_val.configure(text=f"{float(v):.0f}px")
+            self.config_manager.set_wallpaper_config("blur_radius", int(float(v)))
+            self.wallpaper.config["blur_radius"] = int(float(v))
+        blur_slider.configure(command=on_wp_blur)
+
+        def apply_wp_now():
+            self.after(100, lambda: self._wallpaper_loaded and self._render_wallpaper())
+            self.toast.show("Aplicado", type="success")
+        ctk.CTkButton(sec_wallpaper, text="✅ Aplicar ahora", command=apply_wp_now,
+                      fg_color=self.colors["accent"], width=140, height=28).pack(pady=5)
+
+        # Auto-theme from wallpaper
+        auto_theme_var = ctk.BooleanVar(value=wp_config.get("auto_theme", False))
+        def toggle_auto_theme():
+            enabled = auto_theme_var.get()
+            self.config_manager.set_wallpaper_config("auto_theme", enabled)
+            if enabled and self.wallpaper._wallpaper_pil:
+                self._apply_wallpaper_theme()
+            elif not enabled:
+                self.toast.show("Desactiva auto-theme para usar temas manuales", type="info")
+        info_lbl = ctk.CTkLabel(sec_wallpaper,
+                               text="💡 El wallpaper se ve al activar 'Efecto Glass/Acrylic' abajo\n    o al poner las ventanas de módulos con fondo transparente.",
+                               font=("Arial", 9), text_color=self.colors["text_secondary"],
+                               justify="left")
+        info_lbl.pack(anchor="w", padx=15, pady=2)
+
+        ctk.CTkSwitch(sec_wallpaper, text="Auto-tema desde wallpaper",
+                      variable=auto_theme_var, progress_color=self.colors["accent"],
+                      command=toggle_auto_theme).pack(anchor="w", padx=15, pady=5)
+
+        def extract_now():
+            if self.wallpaper._wallpaper_pil:
+                self._apply_wallpaper_theme()
+                self.toast.show("Tema extraído del wallpaper", type="success")
+            else:
+                self.toast.show("No hay wallpaper cargado", type="error")
+        ctk.CTkButton(sec_wallpaper, text="🎨 Extraer colores ahora", command=extract_now,
+                      fg_color=self.colors["accent"], width=180, height=28).pack(pady=5)
+
+        # ── Glass effect ──
+        glass_frame = ctk.CTkFrame(sec_wallpaper, fg_color="transparent")
+        glass_frame.pack(fill="x", padx=15, pady=(8, 2))
+        glass_var = ctk.BooleanVar(value=self.config_manager.get_glass_enabled())
+        def toggle_glass():
+            enabled = glass_var.get()
+            self.config_manager.set_glass_enabled(enabled)
+            if enabled:
+                self._apply_acrylic_effect()
+                # Root wallpaper needed for acrylic to show
+                if self._wallpaper_loaded and self.wallpaper._wallpaper_pil:
+                    self._render_root_wallpaper()
+            else:
+                try:
+                    import ctypes as _ct
+                    hwnd = _ct.windll.user32.GetParent(self.winfo_id())
+                    remove_effects(hwnd)
+                except Exception:
+                    pass
+                # Hide root wallpaper behind opaque frames
+                if self._wallpaper_label:
+                    try:
+                        self._wallpaper_label.destroy()
+                    except Exception:
+                        pass
+                    self._wallpaper_label = None
+        ctk.CTkSwitch(glass_frame, text="Efecto Glass/Acrylic (Windows)",
+                      variable=glass_var, progress_color=self.colors["accent"],
+                      command=toggle_glass).pack(side="left")
+
+        # Glass opacity
+        glass_opa_frame = ctk.CTkFrame(sec_wallpaper, fg_color="transparent")
+        glass_opa_frame.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(glass_opa_frame, text="Translucidez:", text_color=self.colors["text_secondary"]).pack(side="left")
+        glass_opa_slider = ctk.CTkSlider(glass_opa_frame, from_=0.05, to=0.6, number_of_steps=20,
+                                          progress_color=self.colors["accent"])
+        glass_opa_slider.pack(side="left", fill="x", expand=True, padx=8)
+        glass_opa_slider.set(self.wallpaper.config.get("glass_opacity", 0.2))
+        glass_opa_val = ctk.CTkLabel(glass_opa_frame, text=f"{self.wallpaper.config.get('glass_opacity', 0.2):.0%}",
+                                     text_color=self.colors["text"], width=40)
+        glass_opa_val.pack(side="left")
+        def on_glass_opa(v):
+            glass_opa_val.configure(text=f"{float(v):.0%}")
+            self.wallpaper.config["glass_opacity"] = float(v)
+            self.config_manager.set_wallpaper_config("glass_opacity", float(v))
+            if self.config_manager.get_glass_enabled():
+                self._apply_acrylic_effect()
+        glass_opa_slider.configure(command=on_glass_opa)
+
+        ctk.CTkLabel(sec_wallpaper,
+                     text="💡 El blur del glass lo controla Windows automáticamente.\n     Más translucidez = más se ve el wallpaper de fondo.",
+                     font=("Arial", 9), text_color=self.colors["text_secondary"],
+                     justify="left").pack(anchor="w", padx=15, pady=2)
+
+        # UI Opacity
+        ui_opacity_frame = ctk.CTkFrame(sec_wallpaper, fg_color="transparent")
+        ui_opacity_frame.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(ui_opacity_frame, text="Opacidad UI:", text_color=self.colors["text_secondary"]).pack(side="left")
+        ui_opacity_slider = ctk.CTkSlider(ui_opacity_frame, from_=0.15, to=1.0, number_of_steps=18,
+                                           progress_color=self.colors["accent"])
+        ui_opacity_slider.pack(side="left", fill="x", expand=True, padx=8)
+        ui_opacity_slider.set(self.config_manager.get_ui_opacity())
+        ui_opa_val = ctk.CTkLabel(ui_opacity_frame, text=f"{self.config_manager.get_ui_opacity():.0%}",
+                                  text_color=self.colors["text"], width=40)
+        ui_opa_val.pack(side="left")
+        def on_ui_opacity(v):
+            ui_opa_val.configure(text=f"{float(v):.0%}")
+            self.config_manager.set_ui_opacity(float(v))
+            try:
+                import ctypes as _ct
+                hwnd = _ct.windll.user32.GetParent(self.winfo_id())
+                set_window_opacity(hwnd, float(v))
+            except Exception:
+                pass
+        ui_opacity_slider.configure(command=on_ui_opacity)
 
         # ========== SONIDO ==========
         sec_sound = seccion(scroll, "🔊 Sonido")
@@ -3996,6 +4910,7 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
 
     def activate_module(self, module):
         prev = self._active_module
+        self.update_idletasks()
         self.clear_content()
         self._active_module = module
         self.current_menu = lambda m=module: self._show_module_ui(m)
@@ -4011,6 +4926,7 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
         self.events.emit("module.activated", module=module)
 
     def _show_module_ui(self, module):
+        self.update_idletasks()
         self.clear_content()
         module.build(self.content_frame)
 

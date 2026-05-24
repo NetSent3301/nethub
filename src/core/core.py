@@ -10,6 +10,7 @@ import datetime
 import requests
 import re
 from .logger import get_logger, log_exception
+from .wallpaper import WallpaperManager
 
 logger = get_logger("core")
 
@@ -208,10 +209,17 @@ class ConfigManager:
                     if "export_recommendations" not in cfg: cfg["export_recommendations"] = True
                     if "contact_enabled" not in cfg: cfg["contact_enabled"] = True
                     if "skipped_update_version" not in cfg: cfg["skipped_update_version"] = ""
+                    if "wallpaper" not in cfg: cfg["wallpaper"] = dict(WallpaperManager.get_defaults())
+                    if "glass_effect" not in cfg: cfg["glass_effect"] = True
+                    if "ui_opacity" not in cfg: cfg["ui_opacity"] = 1.0
                     return cfg
                 except Exception:
                     logger.warning("Error al parsear config.json, usando defaults")
-        return {"theme": "dark", "custom_colors": None, "appearance_mode": "System", "sound_effects": True, "dashboard_layout": None, "export_recommendations": True, "contact_enabled": True, "skipped_update_version": ""}
+        defaults = {"theme": "dark", "custom_colors": None, "appearance_mode": "System", "sound_effects": True, "dashboard_layout": None, "export_recommendations": True, "contact_enabled": True, "skipped_update_version": ""}
+        defaults["wallpaper"] = dict(WallpaperManager.get_defaults())
+        defaults["glass_effect"] = False
+        defaults["ui_opacity"] = 1.0
+        return defaults
 
     def save_config(self):
         with open(self.config_file, 'w') as f:
@@ -314,6 +322,37 @@ class ConfigManager:
 
         colors = self._ensure_accent_contrast(colors)
         return self._with_contrast_helpers(colors)
+
+    def get_wallpaper_config(self):
+        wp = self.config.get("wallpaper", {})
+        defaults = WallpaperManager.get_defaults()
+        for k, v in defaults.items():
+            if k not in wp:
+                wp[k] = v
+        return wp
+
+    def set_wallpaper_config(self, key, value):
+        wp = self.config.setdefault("wallpaper", {})
+        wp[key] = value
+        self.save_config()
+
+    def set_wallpaper_path(self, path):
+        self.config.setdefault("wallpaper", {})["path"] = path
+        self.save_config()
+
+    def get_glass_enabled(self):
+        return self.config.get("glass_effect", False)
+
+    def set_glass_enabled(self, enabled):
+        self.config["glass_effect"] = enabled
+        self.save_config()
+
+    def get_ui_opacity(self):
+        return max(0.1, min(1.0, self.config.get("ui_opacity", 1.0)))
+
+    def set_ui_opacity(self, opacity):
+        self.config["ui_opacity"] = max(0.1, min(1.0, opacity))
+        self.save_config()
 
     def get_colors(self):
         if self.config["theme"] == "custom" and self.config.get("custom_colors"):
