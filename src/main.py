@@ -2915,21 +2915,32 @@ class NetHUBUltimate(ctk.CTk):
                          text_color=self.colors["text_secondary"],
                          font=("Arial", 9)).pack(side="right", padx=(0, 10))
 
-        # ── Contraseña (solo para no-Google) ────────────────────────
-        if not is_google:
-            pwd_frame = ctk.CTkFrame(sec_account, fg_color="transparent")
-            pwd_frame.pack(fill="x", padx=15, pady=5)
-            ctk.CTkLabel(pwd_frame, text="Contraseña:", text_color=self.colors["text_secondary"]).pack(side="left")
-            pe = ctk.CTkEntry(pwd_frame, width=200, show="*")
-            pe.pack(side="left", padx=8)
-            def save_password():
-                p = pe.get().strip()
-                if len(p) < 4:
-                    self.toast.show("Mínimo 4 caracteres", type="error"); return
-                ok, msg = self.user_manager.change_password(self.current_user, p)
-                self.toast.show(msg, type="success" if ok else "error")
-            ctk.CTkButton(pwd_frame, text="Guardar", command=save_password,
-                         fg_color=self.colors["accent"], width=70, height=28).pack(side="left")
+        # ── Contraseña local (para cuentas Google y locales) ────────
+        has_password = bool(user_data.get("password"))
+        pwd_frame = ctk.CTkFrame(sec_account, fg_color="transparent")
+        pwd_frame.pack(fill="x", padx=15, pady=5)
+        if is_google and not has_password:
+            pwd_label = "🔑 Establecer contraseña local:"
+        elif is_google:
+            pwd_label = "🔑 Cambiar contraseña local:"
+        else:
+            pwd_label = "🔑 Cambiar contraseña:"
+        ctk.CTkLabel(pwd_frame, text=pwd_label, text_color=self.colors["text_secondary"]).pack(side="left")
+        pe = ctk.CTkEntry(pwd_frame, width=200, show="*")
+        pe.pack(side="left", padx=8)
+        def save_password():
+            p = pe.get().strip()
+            if len(p) < 4:
+                self.toast.show("Mínimo 4 caracteres", type="error"); return
+            ok, msg = self.user_manager.change_password(self.current_user, p)
+            if ok:
+                self.user_manager.users[self.current_user]["auth_provider"] = "local"
+                self.user_manager.save_users()
+            self.toast.show(msg, type="success" if ok else "error")
+            if ok:
+                self.reload_ui()
+        ctk.CTkButton(pwd_frame, text="Guardar", command=save_password,
+                     fg_color=self.colors["accent"], width=70, height=28).pack(side="left")
 
         music_frame = ctk.CTkFrame(sec_account, fg_color="transparent")
         music_frame.pack(fill="x", padx=15, pady=5)
@@ -3279,13 +3290,14 @@ class NetHUBUltimate(ctk.CTk):
     def lock_screen(self):
         user_data = self.user_manager.users.get(self.current_user, {}) if self.current_user else {}
         if user_data.get("auth_provider") == "google" and not user_data.get("password"):
-            self.toast.show("Configura una contraseña local antes de usar el bloqueo.", duration=4, type="warning")
+            self.toast.show("Establecé una contraseña local en Ajustes > Cuenta para usar el bloqueo.", duration=5, type="warning")
+            self.after(300, lambda: self.show_settings())
             return
         
         try:
             self.play_sound("welcome")
-        except:
-            pass
+        except Exception:
+            logger.debug("Error reproduciendo sonido de bloqueo")
             
         # Guardar geometría anterior
         self.previous_geometry = self.geometry()
