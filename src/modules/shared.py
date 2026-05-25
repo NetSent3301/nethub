@@ -12,6 +12,7 @@ class ToolFrameContainer(ctk.CTkFrame):
     def __init__(self, parent, title, back_cmd, colors):
         super().__init__(parent, fg_color="transparent")
         self.colors = colors
+        self.parent = parent
         self.back_cmd = back_cmd
         self.is_tool_container = True
         self.auto_back = True
@@ -24,7 +25,7 @@ class ToolFrameContainer(ctk.CTkFrame):
         except:
             pass
 
-        back_btn = ctk.CTkButton(header, text="⬅ VOLVER A LA SUITE", command=back_cmd,
+        back_btn = ctk.CTkButton(header, text="⬅ VOLVER A LA SUITE", command=self._go_back,
                                  fg_color=colors["hover"], hover_color=colors["accent"],
                                  text_color="white", font=("Arial", 11, "bold"), width=160, height=38,
                                  corner_radius=8)
@@ -54,18 +55,24 @@ class ToolFrameContainer(ctk.CTkFrame):
         status_lbl = ctk.CTkLabel(status_frame, text="⚡ SYSTEM CORE ACTIVE", font=("Arial", 10, "bold"), text_color=colors["text"])
         status_lbl.pack(side="right")
 
-    def title(self, *args, **kwargs):
-        pass
-
-    def geometry(self, *args, **kwargs):
-        pass
-
-    def protocol(self, *args, **kwargs):
-        pass
+    def _go_back(self):
+        try:
+            self.back_cmd(self.parent)
+        except TypeError:
+            try:
+                self.back_cmd()
+            except Exception:
+                pass
+        finally:
+            if self.winfo_exists():
+                try:
+                    super().destroy()
+                except Exception:
+                    pass
 
     def destroy(self):
         if getattr(self, 'auto_back', True):
-            self.back_cmd()
+            self._go_back()
         else:
             super().destroy()
 

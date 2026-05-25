@@ -1,16 +1,18 @@
 {
-  "version": "2.4",
-  "release_date": "2026-05-23",
+  "version": "2.5.0",
+  "release_date": "2026-05-24",
   "min_version": "2.0.0",
   "download_url": "https://github.com/NetSent3301/nethub-distro/raw/main/NetHUB_Ultimate.exe",
   "changelog": [
-    "Cuentas Google ahora pueden establecer contraseña local para usar bloqueo",
-    "Pagina OAuth rediseñada: dark theme, animaciones, boton de cerrar",
-    "Fix: HTTP 400 al buscar actualizaciones (URL guardada invalida)",
-    "Fix: spinner fantasma en pagina OAuth que nunca desaparecia",
-    "Update checker apunta al repo nethub (no nethub-distro)",
-    "Fix: except:pass silenciosos reemplazados por logging en lock screen y OAuth"
+    "Refactor completo: eliminación de código duplicado, optimización de módulos y fluidez",
+    "Fix: ImprovedGLI duplicado eliminado (se usa el de core.core)",
+    "Fix: kill_zombie_music() ahora usa referencia segura _main_app",
+    "Fix: módulos faltantes scripting_module y sandbox_module agregados a BUILTIN_MODULES",
+    "Optimización: limpieza de animaciones al cambiar de módulo",
+    "Optimización: reducción de threads daemon sin control",
+    "Eliminación de dead code y métodos vacíos",
+    "Importaciones movidas al inicio de archivos para mejor rendimiento"
   ],
   "mandatory": false,
-  "message": "NetHUB Ultimate 2.4 disponible — Google password, OAuth page, fixes"
+  "message": "NetHUB Ultimate 2.5.0 — Refactor completo, optimización y fluidez"
 }

@@ -46,9 +46,9 @@ class ModuleManager:
 
     BUILTIN_MODULES = [
         "code_module", "crypto_module", "files_module", "hacking_module",
-        "marketplace_module", "monitor_module", "network_module", "notas_module", 
-        "osint_module", "sandbox_module", "search_module", "system_module", 
-        "tasks_module", "utils_module", "music_module",
+        "marketplace_module", "monitor_module", "music_module", "network_module",
+        "notas_module", "osint_module", "sandbox_module", "scripting_module",
+        "search_module", "system_module", "tasks_module", "utils_module",
     ]
 
     def discover_builtin(self):

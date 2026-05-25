@@ -100,9 +100,7 @@ class MarketplaceModule(BaseModule):
             height=35,
         )
         self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        self.search_entry.bind(
-            "<KeyRelease>", lambda e: self._on_search_change(), after=True
-        )
+        self.search_entry.bind("<KeyRelease>", lambda e: self._on_search_change())
 
         ctk.CTkButton(
             search_frame,

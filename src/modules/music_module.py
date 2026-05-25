@@ -29,7 +29,9 @@ class MusicModule(BaseModule):
         self.volume = 0.7
         self.playlist = []
         self.current_index = 0
-        
+        self._update_job = None
+        self._destroying = False
+
         # Initialize pygame mixer if available
         if PYGAME_AVAILABLE:
             try:
@@ -47,11 +49,13 @@ class MusicModule(BaseModule):
         ])
 
     def open_music_player(self):
+        self._destroying = False
+        self._cancel_update_loop()
         app = self.app
         app.clear_content()
         win = ToolFrameContainer(app.content_frame, "Reproductor de Música", self.build, self.colors)
         win.pack(fill="both", expand=True)
-        
+
         # Main container
         main_frame = ctk.CTkFrame(win, fg_color="transparent")
         main_frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -183,10 +187,35 @@ class MusicModule(BaseModule):
         
         # Load initial playlist
         self.refresh_playlist()
-        
-        # Start update thread
-        self.update_thread = threading.Thread(target=self.update_loop, daemon=True)
-        self.update_thread.start()
+        self._schedule_update_loop()
+
+    def _cancel_update_loop(self):
+        if self._update_job is not None:
+            try:
+                self.app.after_cancel(self._update_job)
+            except Exception:
+                pass
+            self._update_job = None
+
+    def _schedule_update_loop(self):
+        self._cancel_update_loop()
+        if self._destroying or not getattr(self.app, "winfo_exists", lambda: False)():
+            return
+        self._update_job = self.app.after(1000, self._check_music_state)
+
+    def _check_music_state(self):
+        if self._destroying or not getattr(self.app, "winfo_exists", lambda: False)():
+            self._update_job = None
+            return
+
+        try:
+            if PYGAME_AVAILABLE and self.pygame_available and self.is_playing and not self.is_paused:
+                if not pygame.mixer.music.get_busy():
+                    self.next_track()
+        except Exception:
+            pass
+
+        self._schedule_update_loop()
 
     def refresh_playlist(self):
         """Refresh the playlist from the music directory"""
@@ -195,9 +224,9 @@ class MusicModule(BaseModule):
             for file_path in self.music_dir.glob("*"):
                 if file_path.is_file() and file_path.suffix.lower() in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
                     self.playlist.append(file_path.name)
-        
+
         self.update_playlist_display()
-        
+
         # If we have tracks and none is selected, select the first one
         if self.playlist and self.current_index >= len(self.playlist):
             self.current_index = 0
@@ -206,11 +235,14 @@ class MusicModule(BaseModule):
 
     def update_playlist_display(self):
         """Update the playlist display in the textbox"""
+        if not hasattr(self, "playlist_box") or not self.playlist_box.winfo_exists():
+            return
+
         self.playlist_box.delete("1.0", "end")
         if not self.playlist:
             self.playlist_box.insert("1.0", "No hay archivos de música en la carpeta 'music'\nColoca tus archivos .mp3, .wav, .ogg, etc. allí.")
             return
-            
+
         for i, track in enumerate(self.playlist):
             prefix = "▶️ " if i == self.current_index else "  "
             self.playlist_box.insert("end", f"{prefix}{track}\n")
@@ -238,6 +270,9 @@ class MusicModule(BaseModule):
 
     def update_track_label(self):
         """Update the now playing label"""
+        if not hasattr(self, "track_label") or not self.track_label.winfo_exists():
+            return
+
         if self.current_track:
             # Clean up filename for display
             display_name = self.current_track.replace('.mp3', '').replace('.wav', '').replace('.ogg', '').replace('.flac', '').replace('.m4a', '')
@@ -322,7 +357,8 @@ class MusicModule(BaseModule):
     def set_volume(self, value):
         """Set volume (0-100)"""
         self.volume = float(value) / 100
-        self.volume_label.configure(text=f"{int(float(value))}%")
+        if hasattr(self, "volume_label") and self.volume_label.winfo_exists():
+            self.volume_label.configure(text=f"{int(float(value))}%")
         if PYGAME_AVAILABLE and self.pygame_available:
             pygame.mixer.music.set_volume(self.volume)
 
@@ -331,19 +367,9 @@ class MusicModule(BaseModule):
         # Note: pygame.mixer doesn't have precise seeking, this is a placeholder
         pass
 
-    def update_loop(self):
-        """Update loop for progress bar and auto-next"""
-        while True:
-            time.sleep(1)
-            try:
-                if PYGAME_AVAILABLE and self.pygame_available and self.is_playing and not self.is_paused:
-                    # Update progress (approximate since pygame.mixer doesn't give exact position)
-                    # For now, we'll just check if music ended and auto-advance
-                    if not pygame.mixer.music.get_busy():
-                        # Music finished, play next track
-                        self.next_track()
-            except:
-                pass  # Ignore errors in update loop
+    def on_deactivate(self):
+        self._destroying = True
+        self._cancel_update_loop()
 
     def manage_playlist(self):
         """Open playlist management window"""
@@ -416,11 +442,14 @@ class MusicModule(BaseModule):
 
     def refresh_manage_playlist_display(self):
         """Refresh the playlist display in management view"""
+        if not hasattr(self, "manage_playlist_box") or not self.manage_playlist_box.winfo_exists():
+            return
+
         self.manage_playlist_box.delete("1.0", "end")
         if not self.playlist:
             self.manage_playlist_box.insert("1.0", "La playlist está vacía.\nAgrega archivos de música a la carpeta de música.")
             return
-            
+
         for i, track in enumerate(self.playlist):
             self.manage_playlist_box.insert("end", f"{i+1}. {track}\n")
 

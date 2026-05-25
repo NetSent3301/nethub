@@ -15,6 +15,7 @@ import random
 import re
 import socket
 import platform
+import webbrowser
 import psutil
 import matplotlib
 matplotlib.use("TkAgg")
@@ -64,8 +65,14 @@ class ToastManager:
     def __init__(self, parent):
         self.parent = parent
         self.active_toasts = []
-        
+
     def show(self, message, duration=3, type="info"):
+        try:
+            if not getattr(self.parent, "winfo_exists", lambda: False)():
+                return
+        except Exception:
+            return
+
         if type in ("warning", "error"):
             try:
                 notification.notify(
@@ -399,166 +406,15 @@ class PremiumSidebarButton(ctk.CTkFrame):
                 self.text_label.configure(text_color=self.colors["text_secondary"], font=("Arial", 13, "bold"))
                 self.text_label.pack_configure(padx=(15, 0))
 
-# ToolFrameContainer y AnimatedGraph importados desde modules.shared
-
-# IA GLI Mejorada
-class ImprovedGLI:
-    def __init__(self, model="llama3:8b", host="http://localhost:11434"):
-        self.model = model
-        self.host = host
-        self.context = []
-        self.conversation_history = []
-        self.system_prompt = """Eres NetHUB GLI, un asistente claro y practico.
-
-Reglas:
-1. Responde siempre en espanol, directo y util.
-2. Si el usuario pregunta algo simple, responde solo la respuesta necesaria.
-3. Usa bloques ```python``` solamente cuando el usuario pida codigo.
-4. No inventes comandos, menus ni texto de ayuda de la app.
-5. Si no sabes algo, dilo honestamente.
-6. Prioriza seguridad y etica en temas de redes o ciberseguridad."""
-        self.quick_prompt = """Eres un asistente de chat rapido.
-Responde en espanol con una frase corta y natural.
-Si es una operacion matematica simple, da solo el resultado.
-No uses markdown, listas, bloques de codigo ni comandos."""
-        
-        self.available = self.check_connection()
-    
-    def check_connection(self):
-        try:
-            response = requests.get(f"{self.host}/api/tags", timeout=2)
-            return response.status_code == 200
-        except requests.RequestException as e:
-            logger.debug("Ollama connection failed: %s", e)
-            return False
-    
-    def _clean_short_response(self, text, limit=140):
-        text = (text or "").strip()
-        text = re.sub(r"```(?:\w+)?", "", text).replace("```", "").strip()
-        lines = [line.strip().strip('"') for line in text.splitlines() if line.strip()]
-        text = " ".join(lines)
-        return text[:limit].strip()
-    
-    def generate(self, prompt, callback=None, use_context=True, system_prompt=None, max_tokens=None):
-        if not self.available:
-            return "Error: Ollama no está corriendo. Inicia 'ollama serve'"
-        
-        # Construir contexto
-        messages = [{"role": "system", "content": system_prompt or self.system_prompt}]
-        if use_context:
-            messages.extend(self.context[-30:])
-        messages.append({"role": "user", "content": prompt})
-        options = {"temperature": 0.2, "top_p": 0.8}
-        if max_tokens:
-            options["num_predict"] = max_tokens
-        
-        try:
-            response = requests.post(f"{self.host}/api/chat",
-                                    json={"model": self.model, "messages": messages, "stream": False, "options": options},
-                                    timeout=120)
-            result = response.json().get("message", {}).get("content", "Sin respuesta")
-            
-            # Guardar en contexto
-            if use_context:
-                self.context.append({"role": "user", "content": prompt})
-                self.context.append({"role": "assistant", "content": result})
-                self.conversation_history.append({"user": prompt, "assistant": result})
-            
-            if callback:
-                callback(result)
-            return result
-        except Exception as e:
-            return f"Error: {str(e)}"
-    
-    def generate_quick(self, prompt, max_chars=140):
-        result = self.generate(prompt, use_context=False, system_prompt=self.quick_prompt, max_tokens=40)
-        return self._clean_short_response(result, max_chars)
-    
-    def generate_stream(self, prompt, chunk_callback):
-        if not self.available:
-            chunk_callback("Error: Ollama no está corriendo. Inicia 'ollama serve'", True)
-            return
-        
-        messages = [{"role": "system", "content": self.system_prompt}]
-        messages.extend(self.context[-30:])
-        messages.append({"role": "user", "content": prompt})
-        
-        full_response = ""
-        
-        try:
-            response = requests.post(f"{self.host}/api/chat",
-                                    json={"model": self.model, "messages": messages, "stream": True},
-                                    stream=True, timeout=120)
-            
-            for line in response.iter_lines():
-                if line:
-                    try:
-                        data = json.loads(line)
-                        if "message" in data and "content" in data["message"]:
-                            chunk = data["message"]["content"]
-                            full_response += chunk
-                            chunk_callback(chunk, False)
-                        if data.get("done"):
-                            break
-                    except:
-                        pass
-            
-            self.context.append({"role": "user", "content": prompt})
-            self.context.append({"role": "assistant", "content": full_response})
-            chunk_callback("", True)
-            
-        except Exception as e:
-            chunk_callback(f"Error: {str(e)}", True)
-    
-    def execute_code(self, code):
-        """Ejecuta código Python de forma segura con sandbox mejorado"""
-        import io
-        import sys
-        from contextlib import redirect_stdout, redirect_stderr
-
-        SAFE_BUILTINS = {
-            "abs": abs, "all": all, "any": any, "ascii": ascii, "bin": bin,
-            "bool": bool, "bytearray": bytearray, "bytes": bytes, "chr": chr,
-            "complex": complex, "dict": dict, "divmod": divmod, "enumerate": enumerate,
-            "filter": filter, "float": float, "format": format, "frozenset": frozenset,
-            "hash": hash, "hex": hex, "id": id, "int": int, "isinstance": isinstance,
-            "issubclass": issubclass, "iter": iter, "len": len, "list": list,
-            "map": map, "max": max, "min": min, "next": next, "oct": oct,
-            "ord": ord, "pow": pow, "print": print, "range": range, "repr": repr,
-            "reversed": reversed, "round": round, "set": set, "slice": slice,
-            "sorted": sorted, "str": str, "sum": sum, "tuple": tuple, "type": type,
-            "zip": zip, "True": True, "False": False, "None": None,
-            "input": lambda prompt="": "0",
-        }
-
-        SAFE_GLOBALS = {
-            "__builtins__": SAFE_BUILTINS,
-            "psutil": psutil, "socket": socket, "platform": platform,
-            "time": time, "datetime": datetime, "math": math,
-            "random": random, "json": json, "re": re,
-        }
-
-        f = io.StringIO()
-        e = io.StringIO()
-
-        try:
-            with redirect_stdout(f), redirect_stderr(e):
-                exec(code, SAFE_GLOBALS)
-            output = f.getvalue()
-            if not output:
-                output = "Codigo ejecutado sin salida"
-            return output
-        except Exception as ex:
-            return f"Error: {str(ex)}\n{e.getvalue()}"
-    
-    def clear_context(self):
-        self.context = []
-        return "Contexto limpiado"
+_main_app = None
 
 # Aplicación principal
 class NetHUBUltimate(ctk.CTk):
     def __init__(self):
         super().__init__()
+        
+        global _main_app
+        _main_app = self
         
         # Configuración ventana
         self.overrideredirect(True)
@@ -597,7 +453,8 @@ class NetHUBUltimate(ctk.CTk):
         self.drag_data = {"x": 0, "y": 0}
         self.animation_running = False
         self.floating_chat_window = None
-        
+        self._destroying = False
+
         # Colores
         self.update_colors()
 
@@ -735,7 +592,6 @@ class NetHUBUltimate(ctk.CTk):
                 splash_frame.destroy()
                 
                 # Intentar restaurar sesión activa
-                import time
                 session = self.config_manager.config.get("last_session")
                 if session and isinstance(session, dict):
                     session_user = session.get("user")
@@ -813,10 +669,20 @@ class NetHUBUltimate(ctk.CTk):
             self.after(100, self.show_in_taskbar)
             
     def destroy(self):
+        if getattr(self, "_destroying", False):
+            return
+        self._destroying = True
         self.stop_main_loop()
-        kill_zombie_music()
-        super().destroy()
-        
+        try:
+            self.tk.eval("after cancel all")
+        except Exception:
+            pass
+        self._kill_zombie_music()
+        try:
+            super().destroy()
+        except Exception:
+            pass
+
     def get_avatar_image(self, size=35):
         avatar_path = self.user_manager.users.get(self.current_user, {}).get("avatar", "")
         if not avatar_path or not os.path.exists(avatar_path):
@@ -1006,12 +872,6 @@ class NetHUBUltimate(ctk.CTk):
                 self._resize_timer = self.after(400, self._render_wallpaper)
             except Exception:
                 pass
-
-    def _fit_content_frame(self):
-        pass
-
-    def _on_canvas_resize(self, event):
-        pass
 
     def update_colors(self):
         self.colors = self.config_manager.get_colors()
@@ -1234,7 +1094,6 @@ class NetHUBUltimate(ctk.CTk):
         if not self._main_loop_running:
             return
         try:
-            import time
             now = time.time()
             for name, anim in list(self._animations.items()):
                 if not anim.get("enabled", True):
@@ -1512,7 +1371,6 @@ class NetHUBUltimate(ctk.CTk):
         self.current_user = username
         user_data = self.user_manager.users.get(username, {})
         self._current_display_name = user_data.get("display_name") or username.split("@")[0]
-        import time
         session_timeout = 86400 if remember else 900  # 24h vs 15min
         self.config_manager.config["last_session"] = {
             "user": self.current_user,
@@ -1603,7 +1461,6 @@ class NetHUBUltimate(ctk.CTk):
         import socketserver
         import secrets
         import urllib.parse
-        import webbrowser
         
         with open(oauth_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
@@ -2013,18 +1870,25 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
         eq_bars = [5, 12, 8, 15, 6, 18, 10, 14, 7, 11]
         self._eq_bars = eq_bars
 
+        _eq_was_collapsed = True
+
         def animate_eq():
+            nonlocal _eq_was_collapsed
             if not self.sidebar.winfo_exists() or not self.eq_canvas.winfo_exists():
                 return
 
             sound_active = self.config_manager.config.get("sound_effects", True)
 
             if self.is_sidebar_collapsed:
-                self.eq_canvas.pack_forget()
-                self.eq_label.configure(text="🔇" if not sound_active else "🔊", font=("Arial", 14, "bold"))
+                if not _eq_was_collapsed:
+                    self.eq_canvas.pack_forget()
+                    self.eq_label.configure(text="🔇" if not sound_active else "🔊", font=("Arial", 14, "bold"))
+                    _eq_was_collapsed = True
                 return
             else:
-                self.eq_canvas.pack(fill="x", pady=2)
+                if _eq_was_collapsed:
+                    self.eq_canvas.pack(fill="x", pady=2)
+                    _eq_was_collapsed = False
                 self.eq_label.configure(
                     text="⚡ HAPTIC SYSTEM: ACTIVE" if sound_active else "⚠️ HAPTIC SYSTEM: MUTED",
                     font=("Arial", 8, "bold")
@@ -2096,18 +1960,29 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
             btn.set_active(btn == active_btn)
     
     def update_clock(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
         if hasattr(self, 'time_label'):
-            self.time_label.configure(text=datetime.datetime.now().strftime("%H:%M:%S"))
-            self.after(1000, self.update_clock)
-    
+            try:
+                if self.time_label.winfo_exists():
+                    self.time_label.configure(text=datetime.datetime.now().strftime("%H:%M:%S"))
+                    self.after(1000, self.update_clock)
+            except Exception:
+                return
+
     def clear_content(self):
-        anim_keys = [k for k in self._animations if k.startswith("radar_") or k == "dashboard_resources"]
+        anim_keys = [k for k in self._animations if not k == "equalizer"]
         for k in anim_keys:
             self.unregister_animation(k)
         for widget in self.content_frame.winfo_children():
             if hasattr(widget, 'is_tool_container'):
                 widget.auto_back = False
             widget.destroy()
+        self._active_module = None
 
         # Slide-in animation: brief slide from right using pack padding
         def slide_in(step=0):
@@ -2595,8 +2470,7 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
             if not (cpu_canvas.winfo_exists() and ram_canvas.winfo_exists()):
                 return
             
-            import time as _time
-            now = _time.time()
+            now = time.time()
 
             # Throttle network scan to every 2 seconds
             if now - _last_network_scan[0] > 2.0:
@@ -2800,7 +2674,6 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                                  fg_color=self.colors["accent"], hover_color=self.colors["hover"],
                                  height=24, width=90, font=("Arial", 9, "bold")).pack(side="left")
                     if art["link"]:
-                        import webbrowser
                         ctk.CTkButton(btn_row, text="🔗 Abrir", width=55, height=24,
                                      fg_color="transparent", hover_color=self.colors["hover"],
                                      text_color=self.colors["text_secondary"],
@@ -2987,7 +2860,6 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                                      height=24, width=100, font=("Arial", 9, "bold")).pack(side="left")
                         
                         if art["link"]:
-                            import webbrowser
                             ctk.CTkButton(act_row, text="🔗 Abrir", width=60, height=24,
                                          fg_color="transparent", hover_color=self.colors["hover"],
                                          text_color=self.colors["text_secondary"],
@@ -3486,7 +3358,6 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                 rwin.geometry("500x400")
                 txt = ctk.CTkTextbox(rwin, wrap="word", font=("Consolas", 10))
                 txt.pack(fill="both", expand=True, padx=10, pady=10)
-                import json
                 txt.insert("1.0", json.dumps(r, indent=2, ensure_ascii=False, default=str))
                 txt.configure(state="disabled")
 
@@ -3852,7 +3723,6 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
 
             linked = user_data.get("google_linked")
             if linked:
-                import time
                 linked_str = time.strftime("%d/%m/%Y %H:%M", time.localtime(linked))
                 ctk.CTkLabel(info_col, text=f"Vinculado: {linked_str}",
                             font=("Arial", 9), text_color=self.colors["text_secondary"],
@@ -4212,10 +4082,6 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                 
                 # En una implementación real, aquí se enviaría el ticket por email o se crearía un issue en GitHub
                 # Por ahora, solo guardamos el ticket en un archivo local
-                import json
-                import time
-                import os
-                
                 ticket_data = {
                     "user": self.current_user,
                     "timestamp": time.time(),
@@ -4450,7 +4316,7 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
                     logger.debug("Error reproduciendo sonido de unlock")
                 
                 # Detener la música de bloqueo de forma ultra segura
-                kill_zombie_music()
+                self._kill_zombie_music()
                 
                 # Restaurar Alt+F4 y protocolo de cierre normal al desbloquear
                 self.unbind("<Alt-Key-F4>")
@@ -4584,7 +4450,6 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
 
         def open_browser():
             if download_url:
-                import webbrowser
                 webbrowser.open(download_url)
 
         ctk.CTkButton(btn_frame, text="🌐 Abrir en navegador", command=open_browser,
@@ -4954,12 +4819,24 @@ p{font-size:14px;color:#a0a0a0;line-height:1.6}
             else:
                 self.current_menu()
 
+    def _kill_zombie_music(self):
+        try:
+            if hasattr(self, 'music_process'):
+                pid = self.music_process.pid
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            logger.debug("No se pudo matar proceso música por PID")
+        try:
+            subprocess.run(["taskkill", "/F", "/IM", "ffplay.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            logger.debug("No se pudo matar ffplay.exe")
 
 
 def kill_zombie_music():
+    global _main_app
     try:
-        if 'app' in globals() and hasattr(app, 'music_process'):
-            pid = app.music_process.pid
+        if _main_app is not None and hasattr(_main_app, 'music_process'):
+            pid = _main_app.music_process.pid
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         logger.debug("No se pudo matar proceso música por PID")
@@ -4981,4 +4858,5 @@ atexit.register(kill_zombie_music)
 
 if __name__ == "__main__":
     app = NetHUBUltimate()
+    _main_app = app
     app.mainloop()
